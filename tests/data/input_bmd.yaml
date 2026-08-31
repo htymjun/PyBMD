@@ -1,0 +1,17 @@
+required:
+  - time_step   : 1
+  - n_space_dims: 2
+  - n_variables : 1
+  - n_dft       : 32
+
+optional:
+  - overlap        : 50
+  - mean_type      : 'longtime'
+  - regions        : [1, 2]
+  - max_freq_idx   : 8
+  - solver         : 'MengiOverton'
+  - tol            : 1.0e-6
+  - n_it_max       : 500
+  - dtype          : 'double'
+  - savedir        : 'bmd_results'
+  - save_modes     : True

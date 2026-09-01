@@ -18,7 +18,8 @@ than to "PyBMD vs. MATLAB" as a whole:
   Expected to agree to ~1e-13 relative.
 - Tier B: end-to-end, against the unmodified reference.
 - Tier C: the numerical-radius solver, head-to-head on identical ``B``
-  matrices -- this is where the deviations documented in ``CLAUDE.md`` live.
+  matrices, with a dense angular scan plus local refinement as an independent
+  check -- this is where the deviations documented in ``CLAUDE.md`` live.
 
 See ``docs/octave_cross_validation.md`` for the full measured tables.
 '''
@@ -182,7 +183,7 @@ def test_tier_a_qhat_and_b_match(small_data, tmp_path, weight_kind):
         f = int(f)
         rel = (np.max(np.abs(q_hat[f] - q_hat_ref[f, :, :]))
               / np.max(np.abs(q_hat_ref[f, :, :])))
-        assert rel < 1e-10, f'Q_hat row {f}: rel diff {rel:.3e}'
+        assert rel < 1e-12, f'Q_hat row {f}: rel diff {rel:.3e}'
 
     max_rel = 0.0
     for i in range(bmd.n_triads):
@@ -190,7 +191,7 @@ def test_tier_a_qhat_and_b_match(small_data, tmp_path, weight_kind):
         B_ref = b_all_ref[:, :, i]
         rel = np.max(np.abs(B - B_ref)) / max(np.max(np.abs(B_ref)), 1e-300)
         max_rel = max(max_rel, rel)
-    assert max_rel < 1e-10, f'max rel B diff: {max_rel:.3e}'
+    assert max_rel < 1e-12, f'max rel B diff: {max_rel:.3e}'
 
 
 # ---------------------------------------------------------------------------
@@ -203,8 +204,8 @@ def test_tier_c_mengi_overton_matches_truth_and_dominates_reference(
     The crux of the cross-validation. On the *same* B matrices (Tier A
     already showed those match to ~1e-10):
 
-    - PyBMD's mengi_overton matches a dense brute-force angular scan on
-      every triad;
+    - PyBMD's mengi_overton matches a dense angular scan with local refinement
+      on every triad;
     - the reference's |L| never exceeds PyBMD's -- the one-sided invariant
       that holds regardless of solver noise, from CLAUDE.md's deviations 1/2:
       the reference under-estimates the numerical radius, never over.
@@ -226,7 +227,7 @@ def test_tier_c_mengi_overton_matches_truth_and_dominates_reference(
                          abs(abs(w_py) - bf) / max(bf, 1e-300))
 
         r_ref = L_ref[t.f1_idx[i], t.f2_idx[i]]
-        assert abs(r_ref) <= abs(w_py) * (1 + 1e-6), (
+        assert abs(r_ref) <= abs(w_py) * (1 + 1e-8), (
             f'triad {i} (k={t.k[i]}, l={t.l[i]}): reference {abs(r_ref):.6e} '
             f'exceeds PyBMD {abs(w_py):.6e}')
         if bf > 1e-9:
@@ -234,7 +235,7 @@ def test_tier_c_mengi_overton_matches_truth_and_dominates_reference(
             n_over_1pct += rel > 0.01
             n_over_10pct += rel > 0.10
 
-    assert max_rel_bf < 1e-5, (
+    assert max_rel_bf < 5e-7, (
         f'PyBMD mengi_overton vs. brute force: max rel diff {max_rel_bf:.3e}')
     # not asserted exactly (data/config dependent): recorded here so a
     # regression in either solver is visible without re-deriving the numbers.
@@ -279,7 +280,7 @@ def test_tier_c_full_dataset_matches_measured_deviation(
     vals_py = np.abs(bmd.L[t.f1_idx, t.f2_idx])
     vals_ref = np.abs(L_ref[t.f1_idx, t.f2_idx])
 
-    assert np.all(vals_ref <= vals_py * (1 + 1e-6)), (
+    assert np.all(vals_ref <= vals_py * (1 + 1e-8)), (
         'reference exceeded PyBMD on at least one triad')
     rel = np.abs(vals_ref - vals_py) / np.maximum(vals_py, 1e-300)
     assert int(np.sum(rel > 0.01)) == n_over_1pct
@@ -308,19 +309,19 @@ def test_tier_b_modes_and_energy_transfer_agree(small_data, tmp_path):
 
     vals_py = np.abs(bmd.L[t.f1_idx, t.f2_idx])
     vals_ref = np.abs(L_ref[t.f1_idx, t.f2_idx])
-    agree = np.abs(vals_py - vals_ref) <= 1e-6 * np.maximum(vals_py, 1e-300)
+    agree = np.abs(vals_py - vals_ref) <= 1e-8 * np.maximum(vals_py, 1e-300)
     assert agree.sum() > 0.5 * t.n_triads, (
         'too few triads agree on |L| to isolate mode/T comparison')
 
     for i in np.flatnonzero(agree):
         i = int(i)
         assert bmd.T[t.f1_idx[i], t.f2_idx[i]] == pytest.approx(
-            float(T_ref[t.f1_idx[i], t.f2_idx[i]]), abs=1e-6, rel=1e-4)
+            float(T_ref[t.f1_idx[i], t.f2_idx[i]]), abs=1e-8, rel=1e-5)
         for comp in (0, 1):
             a = bmd.modes[i, comp].ravel()
             b = np.asarray(P_ref[comp, i]).ravel()
             overlap = abs(np.vdot(a, b)) / (np.linalg.norm(a) * np.linalg.norm(b))
-            assert overlap == pytest.approx(1.0, abs=1e-6)
+            assert overlap == pytest.approx(1.0, abs=1e-8)
 
 
 # ---------------------------------------------------------------------------
@@ -371,7 +372,7 @@ def test_cbmd_tier_a_matches_reference(small_data, tmp_path, case):
         B_ref = b_all_ref[:, :, i]
         rel = np.max(np.abs(B - B_ref)) / max(np.max(np.abs(B_ref)), 1e-300)
         max_rel = max(max_rel, rel)
-    assert max_rel < 1e-10, f'max rel B diff: {max_rel:.3e}'
+    assert max_rel < 1e-12, f'max rel B diff: {max_rel:.3e}'
 
 
 def test_cbmd_reduces_to_bmd_against_reference(small_data, tmp_path):
@@ -394,4 +395,4 @@ def test_cbmd_reduces_to_bmd_against_reference(small_data, tmp_path):
     t = bmd.triads
     L_bmd = out_bmd['L'][t.f1_idx, t.f2_idx]
     L_cbmd = out_cbmd['L'][t.f1_idx, t.f2_idx]
-    np.testing.assert_allclose(L_bmd, L_cbmd, rtol=1e-9, atol=1e-14)
+    np.testing.assert_allclose(L_bmd, L_cbmd, rtol=1e-12, atol=1e-14)

@@ -34,22 +34,35 @@ _CACHE = {}          # in-process cache: same parameters -> reused result
 _SCRATCH = None       # lazily created, shared for the life of the process
 
 
+def _require_or_skip(message):
+    '''
+    Skip optional local cross-validation prerequisites by default, but fail
+    hard when the dedicated CI job says those prerequisites must be present.
+    '''
+    flag = os.environ.get('PYBMD_REQUIRE_OCTAVE_REF', '').lower()
+    if flag in ('1', 'true', 'yes', 'on'):
+        pytest.fail(message)
+    pytest.skip(message)
+
+
 def require_octave():
     '''Return the ``octave-cli`` executable, or skip the test.'''
     exe = shutil.which('octave-cli') or shutil.which('octave')
     if exe is None:
-        pytest.skip('octave-cli not found on PATH; install Octave to run '
-                     'the reference cross-validation.')
+        _require_or_skip(
+            'octave-cli not found on PATH; install Octave to run the '
+            'reference cross-validation.')
     return exe
 
 
 def require_refs():
     '''Return the path to ``refs/bmd/``, or skip the test.'''
     if not os.path.exists(os.path.join(_REFS_BMD, 'bmd.m')):
-        pytest.skip(f'{_REFS_BMD}/bmd.m not found; refs/bmd is a git '
-                     f'submodule (research/non-commercial license, so it is '
-                     f'a pointer rather than vendored code) -- run '
-                     f'`git submodule update --init` to populate it.')
+        _require_or_skip(
+            f'{_REFS_BMD}/bmd.m not found; refs/bmd is a git submodule '
+            f'(research/non-commercial license, so it is a pointer rather '
+            f'than vendored code) -- run `git submodule update --init` to '
+            f'populate it.')
     return _REFS_BMD
 
 
@@ -58,7 +71,7 @@ def require_full_dataset():
     refs_dir = require_refs()
     path = os.path.join(refs_dir, 'wake_Re500.mat')
     if not os.path.exists(path):
-        pytest.skip(f'{path} not found.')
+        _require_or_skip(f'{path} not found.')
     return path
 
 
@@ -360,11 +373,32 @@ end
 # brute-force numerical radius, for the solver-vs-solver-vs-truth comparison
 # ---------------------------------------------------------------------------
 
-def brute_force_radius(A, n_theta=40001):
-    '''Numerical radius by dense search over the rotation angle.'''
+def brute_force_radius(A, n_theta=40001, refine=True):
+    '''
+    Numerical radius by dense search over the rotation angle, optionally
+    refined in the winning grid cell.
+    '''
     from pybmd.bmd.optimizers import max_fov
-    theta = np.linspace(0, 2 * np.pi, n_theta)
-    return float(np.max(max_fov(A, theta)))
+    theta = np.linspace(0, 2 * np.pi, n_theta, endpoint=False)
+    vals = max_fov(A, theta)
+    i = int(np.argmax(vals))
+    best = float(vals[i])
+    if not refine:
+        return best
+
+    import scipy.optimize as opt
+    step = 2 * np.pi / n_theta
+    center = float(theta[i])
+
+    def objective(th):
+        return -float(max_fov(A, np.mod(th, 2 * np.pi))[0])
+
+    res = opt.minimize_scalar(
+        objective, bounds=(center - step, center + step), method='bounded',
+        options={'xatol': 1e-13})
+    if res.success:
+        best = max(best, -float(res.fun))
+    return best
 
 
 def octave_hamming_window(n):

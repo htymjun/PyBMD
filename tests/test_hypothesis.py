@@ -17,7 +17,7 @@ sys.path.append(os.path.join(CFD, '../'))
 from pybmd.bmd.standard import Standard
 import pybmd.utils.weights as utils_weights
 
-FIGURES_DIR = os.path.join(CFD, 'figures')
+FIGURES_DIR = os.path.join(CFD, '..', 'docs', 'figures', 'hypothesis')
 
 _TMPDIR = tempfile.mkdtemp(prefix='pybmd_test_bmd_')
 atexit.register(shutil.rmtree, _TMPDIR, ignore_errors=True)
@@ -294,7 +294,14 @@ def test_reference_figures():
         ax_b = fig.add_subplot(3, 2, 2 * row + 2, projection='3d')
         t = bmd.triads
         vals = np.abs(bmd.L[t.f1_idx, t.f2_idx])
-        ax_b.plot_trisurf(t.f1, t.f2, vals, cmap='viridis', linewidth=0.1)
+        # plot_trisurf colours by the *data* range, not by set_zlim, so a
+        # panel that is flat relative to the z-axis (e.g. the non-resonant and
+        # quartet cases, at <1% of the 0-0.05 range) would otherwise be
+        # painted with the full colormap and read as structured; pin vmin/vmax
+        # to the z-limits so colour and height agree, as MATLAB's fixed caxis
+        # does in the published figure.
+        ax_b.plot_trisurf(t.f1, t.f2, vals, cmap='viridis', linewidth=0.1,
+                          vmin=0, vmax=0.05)
         ax_b.set_zlim(0, 0.05)
         ax_b.set_xlabel('$f_1$')
         ax_b.set_ylabel('$f_2$')
@@ -325,7 +332,8 @@ def test_reference_figures():
     ax0.set_xlabel('$f$')
 
     ax1 = fig2.add_subplot(1, 3, 2, projection='3d')
-    ax1.plot_trisurf(f1v, f2v, B[valid], cmap='viridis', linewidth=0.1)
+    ax1.plot_trisurf(f1v, f2v, B[valid], cmap='viridis', linewidth=0.1,
+                     vmin=0, vmax=0.25)
     ax1.set_title('(b) classical bispectrum')
     ax1.set_zlim(0, 0.25)
     ax1.set_xlabel('$f_1$')
@@ -333,9 +341,16 @@ def test_reference_figures():
     ax1.set_zlabel('$|B|$')
 
     ax2 = fig2.add_subplot(1, 3, 3, projection='3d')
-    ax2.plot_trisurf(f1v, f2v, L_grid[valid], cmap='viridis', linewidth=0.1)
+    # the z-limit must come from the data: L_grid peaks around 0.057 here, and
+    # a fixed limit taken from an unrelated scale (e.g. panel (b)'s, or a
+    # guessed round number) either flattens the peak into invisibility or
+    # leaves the panel mostly empty -- neither matches the published figure,
+    # which shows one clear dominant peak.
+    z_max = float(np.nanmax(L_grid[valid])) * 1.05
+    ax2.plot_trisurf(f1v, f2v, L_grid[valid], cmap='viridis', linewidth=0.1,
+                     vmin=0, vmax=z_max)
     ax2.set_title('(c) mode bispectrum')
-    ax2.set_zlim(0, 1.5)
+    ax2.set_zlim(0, z_max)
     ax2.set_xlabel('$f_1$')
     ax2.set_ylabel('$f_2$')
     ax2.set_zlabel(r'$|\lambda_1|$')

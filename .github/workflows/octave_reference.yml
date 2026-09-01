@@ -37,3 +37,5 @@ jobs:
       # cross-validates PyBMD against the real bmd.m/cbmd.m under Octave; see
       # docs/octave_cross_validation.md for the method and measured tables
       - run: pytest tests/test_octave_reference.py -q
+        env:
+          PYBMD_REQUIRE_OCTAVE_REF: '1'

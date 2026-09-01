@@ -20,11 +20,17 @@ jobs:
           # refs/bmd is a git submodule pointing at olivertschmidt/bmd, the
           # original MATLAB reference (research/non-commercial license) --
           # tracked as a pointer, never vendored, so it needs its own checkout
-          submodules: true
+          submodules: recursive
+
+      - name: Verify reference submodule
+        run: |
+          git submodule sync --recursive
+          git submodule update --init --recursive
+          test -f refs/bmd/bmd.m
 
       - uses: actions/setup-python@v7
         with:
-          python-version: '3.12'
+          python-version: '3.13'
           cache: pip
           cache-dependency-path: setup.cfg
 

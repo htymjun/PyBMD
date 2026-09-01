@@ -1,0 +1,3 @@
+[submodule "refs/bmd"]
+	path = refs/bmd
+	url = https://github.com/olivertschmidt/bmd

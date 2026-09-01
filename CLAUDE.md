@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 pip install -e '.[mpi,io,test]'      # editable install; extras: mpi, io (.mat/.nc), test, docs
+git submodule update --init          # populate refs/bmd (the MATLAB reference), only needed
+                                     # for tests/test_octave_reference.py -- see Testing strategy
 
 pytest                                # full suite, ~60 s, 223 tests
 pytest -m "not slow"                  # fast subset, ~45 s
@@ -75,10 +77,13 @@ some triad actually references. With `max_freq_idx` set that is a small fraction
 ### Deviations from the MATLAB reference — do not revert these
 
 Each fixes a silent wrong answer; all three are covered by regression tests. Measured end-to-end
-on the 169 triads of the shipped cylinder-wake fixture (`regions=[1,2]`, `max_freq_idx=12`)
-against a brute-force scan of the numerical radius: `MengiOverton` matches to machine precision on
-all 169, `refs/bmd.m` as transcribed is off by >1% on 52 of them (>10% on 29), always an
-*under*-estimate, since `B = Q3^H (Q1∘Q2∘w)/n_blocks` is tiny (median `‖B‖₁ ~ 6.5e-6` there).
+on the 169 triads of the full cylinder-wake dataset (`regions=[1,2]`, `max_freq_idx=12`), run
+*directly under Octave* against `refs/bmd/bmd.m` itself (see
+[`docs/octave_cross_validation.md`](docs/octave_cross_validation.md)): `MengiOverton` matches a
+brute-force scan of the numerical radius to ~5e-8, the genuine `refs/bmd.m` is off by >1% on 52 of
+the 169 triads (>10% on 29), always an *under*-estimate, since `B = Q3^H (Q1∘Q2∘w)/n_blocks` is
+tiny (median `‖B‖₁ ~ 5.2e-6` there). These figures were originally measured against a Python
+transcription of `bmd.m` and now reproduce exactly against the real source.
 Deviation 2 alone fixes 51/52; deviation 1 alone fixes none on this fixture — it only matters
 once deviation 2 has rescaled the problem into a regime where a second, subtler mismatch shows up.
 This is why the two must be applied together, not as alternatives.
@@ -97,11 +102,16 @@ This is why the two must be applied together, not as alternatives.
    case, and without it the `max(w,1.0)` clamp would make deviation 2 alone insufficient (see the
    `only pow2-prescale fix` row not being enough on its own for the last cylinder-wake triad).
 
-`solver='simpleIteration'` reproduces the reference's only *reachable* solver and exists for
-regression; it is not globally convergent (under-estimated in 14/40 random matrices, worst 62 %
-low). Note `refs/bmd.m` validates `'simpleIteration'` in its options check but its solver `switch`
-only matches `'simpleit'`, so that branch actually errors out in MATLAB and was never itself
-cross-checked against a real run.
+Confirmed live under Octave, for both `bmd.m` and `cbmd.m` (see
+[`docs/octave_cross_validation.md`](docs/octave_cross_validation.md)): the reference's actually
+*reachable* solvers are `'MengiOverton'` and `'HeWatson'`. `'simpleIteration'` passes the option
+validator but the inner `switch` has no matching case (`case {'simpleit'}` is what's there instead)
+and errors with `'Unknown solver.'`; `'eig'` fails the same way; `'simpleit'` itself fails the
+validator, one step earlier. So neither spelling of the power-iteration solver is reachable from a
+real `bmd.m`/`cbmd.m` call — `solver='simpleIteration'` in `optimizers.py` reproduces the
+*algorithm* (Watson's simple iteration, Algorithm 1 of the paper's appendix) for regression
+purposes, not a path the reference itself can actually take; it is not globally convergent
+(under-estimated in 14/40 random matrices, worst 62 % low).
 
 **Only two solvers are ported: `MengiOverton` (default) and `simpleIteration`.** The paper's
 appendix (`refs/Schmidt_2020_NODY_r2.tex`) actually prescribes He & Watson's nested algorithm —
@@ -109,10 +119,12 @@ appendix (`refs/Schmidt_2020_NODY_r2.tex`) actually prescribes He & Watson's nes
 Mengi–Overton the standard solver because He–Watson is only locally convergent per restart and
 needs a random start vector to escape local optima, which Mengi–Overton doesn't. `he_watson` and
 `solver='MengiOvertonMATLAB'` (the `matlab_compat` bug-compatibility mode, deviations 1/2/4
-reverted) were both removed from `optimizers.py`: neither is reachable from a real BMD run, there
-is no MATLAB on this machine to cross-validate `MengiOvertonMATLAB` against, and both pulled in
-the module's only RNG usage (`_random_start`, `seed`). If a MATLAB cross-check is ever needed
-again, reconstruct `matlab_compat` from this note rather than re-adding a live code path for it.
+reverted) were both removed from `optimizers.py`: neither is reachable from a real BMD run, and
+both pulled in the module's only RNG usage (`_random_start`, `seed`). Octave can now run
+`refs/bmd.m` directly (see above), so a `matlab_compat` cross-check no longer needs reconstructing
+from a note — if `MengiOvertonMATLAB` is ever revisited, validate it the same way
+`docs/octave_cross_validation.md` validates everything else, live, rather than re-adding a
+permanent code path for it.
 
 ### Conventions that bite
 
@@ -129,7 +141,7 @@ again, reconstruct `matlab_compat` from this note rather than re-adding a live c
 
 ## Testing strategy
 
-There is no MATLAB on this machine, so correctness rests on
+The primary regression net does not depend on MATLAB and runs everywhere:
 `test_bispectrum_matches_closed_form`: for an on-grid, boxcar-windowed, block-random-phase signal
 the complex bispectrum is analytically `L = (a1·a2·a3/8)·Σ w·conj(φ3)·φ1·φ2`, with every other
 triad exactly zero. It matches to ~5e-15. Supporting checks: conjugate symmetry
@@ -139,3 +151,16 @@ above (complex `L` to 1e-13, modes to 1.0 correlation).
 
 Modes are defined only up to a unit-modulus phase — compare them with
 `|<a,b>| / (‖a‖‖b‖) ≈ 1`, never elementwise.
+
+Octave is available on this machine and can run `refs/bmd/bmd.m`/`cbmd.m` directly, so the
+Deviations numbers above are now cross-checked against the genuine MATLAB source rather than only
+a Python transcription of it. `refs/bmd` is a **git submodule** pointing at
+`olivertschmidt/bmd` — the reference's research/non-commercial license means it must stay a
+pointer rather than vendored code; run `git submodule update --init` to populate it locally.
+`tests/test_octave_reference.py` (`pytest -m slow`, or `pytest tests/test_octave_reference.py`)
+exercises this; it self-skips, not errors, when `octave-cli` is absent or the submodule hasn't been
+initialized. `.github/workflows/octave_reference.yml` runs it in CI (checks out the submodule,
+`apt-get install`s Octave). See
+[`docs/octave_cross_validation.md`](docs/octave_cross_validation.md) for the method (three
+comparison tiers, isolating the DFT/blocking/weighting stage from the solver) and the full measured
+tables, with figures.

@@ -10,3 +10,12 @@ htmlcov/
 # results written by fit() and by the examples
 bmd_results/
 example*_out/
+
+# refs/ holds copies of external reference material used only for local/CI
+# cross-validation (see docs/octave_cross_validation.md). The MATLAB source
+# itself (refs/bmd) is a git submodule -- tracked as a pointer, never
+# vendored -- so its own license (research/non-commercial) never applies to
+# this MIT-licensed repo. Everything else under refs/ (the paper preprint,
+# figures) is local-only and must stay untracked for the same reason.
+refs/*
+!refs/bmd

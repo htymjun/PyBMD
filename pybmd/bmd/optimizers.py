@@ -7,29 +7,34 @@ field of values
     r(A) = \\max_{\\|z\\|=1} |z^H A z|,
 
 which is the quantity maximised at every triad of the bispectral mode
-decomposition.  Three algorithms are provided:
+decomposition.  Two algorithms are provided:
 
 - :func:`mengi_overton` -- level-set algorithm of Mengi & Overton (2005);
   globally convergent, and the default.
-- :func:`he_watson` -- 'An Algorithm' of He & Watson (1997); globally optimal
-  upon convergence, but slower and less reliable.
 - :func:`simple_iteration` -- Watson's simple power iteration; cheap, but not
   guaranteed to find the global optimum.
 
 .. note::
 
-    :func:`max_fov` uses the *signed* largest eigenvalue of the Hermitian part.
-    The reference MATLAB implementation uses ``max(abs(eig(H)))`` instead,
-    which makes the level-set intersection filter in :func:`mengi_overton`
-    discard valid angles and terminate at a local maximum.  See :func:`max_fov`.
+    The reference MATLAB implementation, ``bmd.m``, originally shipped
+    with the paper (Schmidt 2020) uses He & Watson's (1997) nested-iteration
+    algorithm -- see the appendix of ``Schmidt_2020_NODY_r2.tex``, whose
+    Algorithm 1 is :func:`simple_iteration` here. A later revision of
+    ``bmd.m`` (17-Aug-2023) replaced that default with Mengi & Overton's
+    globally convergent level-set algorithm, which is what this module makes
+    the default too. He & Watson's algorithm itself is not ported: it is only
+    locally convergent per restart, and PyBMD has no use for a solver that
+    needs a random start vector to escape local optima when
+    :func:`mengi_overton` finds the global one directly and deterministically.
 '''
 import numpy as np
 import scipy.linalg as sla
 
 
-__all__ = ['solve', 'mengi_overton', 'he_watson', 'simple_iteration', 'max_fov']
+__all__ = ['solve', 'mengi_overton', 'simple_iteration', 'max_fov',
+           'default_start', 'SOLVERS']
 
-SOLVERS = ('MengiOverton', 'HeWatson', 'simpleIteration')
+SOLVERS = ('MengiOverton', 'simpleIteration')
 
 # unit-circle / level-set detection tolerance, as in the reference implementation
 _SQRT_EPS = np.sqrt(np.finfo(float).eps)
@@ -55,14 +60,13 @@ def max_fov(A, theta):
     .. note::
 
         The *signed* largest eigenvalue is returned, not the largest in
-        modulus.  Since the Hermitian part at ``theta + pi`` is the negative of
-        the one at ``theta``, both give the same maximum over all angles, and
-        so the same numerical radius.  They do not, however, give the same
-        *level sets*: the unimodular generalized eigenvalues located by
+        modulus. Since the Hermitian part at ``theta + pi`` is the negative
+        of the one at ``theta``, both give the same maximum over all angles,
+        and so the same numerical radius.  They do not, however, give the
+        same *level sets*: the unimodular generalized eigenvalues located by
         :func:`mengi_overton` are the angles at which the signed
         ``lambda_max`` equals the current level, and filtering them with the
-        modulus rejects valid angles.  The level-set search then finds no new
-        interval to descend into and returns a local maximum.
+        modulus would reject valid angles.
     '''
     theta = np.atleast_1d(np.asarray(theta, dtype=float))
     out = np.empty(theta.shape[0], dtype=float)
@@ -87,10 +91,9 @@ def _dominant_eigvec(A, phi):
 
 def _pow2_scale(A):
     '''
-    Rescale ``A`` so that ``||A||_1`` lies in ``(0.5, 1]``, returning the scaled
-    matrix and the factor used.
+    Rescale ``A`` so that ``||A||_1`` lies in ``(0.5, 1]``.
 
-    The unit-circle test in the level-set solvers is ``abs(abs(D) - 1) <=
+    The unit-circle test in the level-set solver is ``abs(abs(D) - 1) <=
     sqrt(eps) * ||A||_1`` -- an *absolute* tolerance on a dimensionless
     quantity, scaled by the norm.  For the matrices BMD actually produces that
     norm is small (``B`` carries a ``1/n_blocks`` and the weights, and runs at
@@ -106,21 +109,14 @@ def _pow2_scale(A):
 
     :param numpy.ndarray A: square complex matrix.
 
-    :return: the scaled matrix and the scale factor.
-    :rtype: tuple(numpy.ndarray, float)
+    :return: the scaled matrix.
+    :rtype: numpy.ndarray
     '''
     norm_1 = float(np.linalg.norm(A, 1))
     if norm_1 == 0.0 or not np.isfinite(norm_1):
-        return A, 1.0
+        return A
     scale = np.ldexp(1.0, int(np.ceil(np.log2(norm_1))))
-    return A / scale, scale
-
-
-def _random_start(n, rng):
-    '''Random complex start vector, matching the reference ``rand + 1i*rand``.'''
-    if rng is None:
-        rng = np.random.default_rng()
-    return rng.uniform(size=n) + 1j * rng.uniform(size=n)
+    return A / scale
 
 
 def default_start(A, n_scan=16):
@@ -128,17 +124,12 @@ def default_start(A, n_scan=16):
     Deterministic start vector: the maximiser of the field of values over a
     coarse scan of rotation angles.
 
-    The reference implementation starts :func:`simple_iteration` and
-    :func:`he_watson` from a random vector, which makes results depend on the
-    state of a global generator -- and, under MPI, on how triads happen to be
-    distributed across ranks.  Scanning instead is deterministic, costs
-    ``n_scan`` eigendecompositions of an ``(n_blocks, n_blocks)`` matrix, and
-    starts the search at or above the largest sampled local maximum.
-
-    The last point matters for :func:`he_watson`, which stops when the level
-    curve has no crossings.  Started too low -- below the *minimum* of
-    ``lambda_max`` over angle -- the level is never crossed at all, and that
-    stopping test fires while the true maximum is still far above.
+    The reference implementation starts :func:`simple_iteration` from a
+    random vector, which makes results depend on the state of a global
+    generator -- and, under MPI, on how triads happen to be distributed
+    across ranks.  Scanning instead is deterministic, costs ``n_scan``
+    eigendecompositions of an ``(n_blocks, n_blocks)`` matrix, and starts the
+    search at or above the largest sampled local maximum.
 
     :param numpy.ndarray A: square complex matrix.
     :param int n_scan: number of angles to scan over ``[0, pi)``. Default is 16.
@@ -163,27 +154,25 @@ def default_start(A, n_scan=16):
     return best_vec.astype(complex)
 
 
-def simple_iteration(A, z_0=None, tol=1e-6, n_it_max=100, rng=None):
+def simple_iteration(A, z_0=None, tol=1e-8, n_it_max=100):
     '''
-    Watson's simple power iteration for the numerical radius.  Cheap, but it is
-    not guaranteed to find the global optimum -- on random matrices it
+    Watson's simple power iteration for the numerical radius (Algorithm 1 of
+    the appendix of ``Schmidt_2020_NODY_r2.tex``).  Cheap, but it is not
+    guaranteed to find the global optimum -- on random matrices it
     under-estimates the numerical radius fairly often.  Prefer
     :func:`mengi_overton` unless reproducing legacy results.
 
     :param numpy.ndarray A: square complex matrix.
-    :param numpy.ndarray z_0: start vector. Default is :func:`default_start`,
-        or a random vector when ``rng`` is given.
-    :param float tol: convergence tolerance on ``|w - w_old|``. Default is 1e-6.
+    :param numpy.ndarray z_0: start vector. Default is :func:`default_start`.
+    :param float tol: convergence tolerance on ``|w - w_old|``. Default is 1e-8.
     :param int n_it_max: maximum number of iterations. Default is 100.
-    :param numpy.random.Generator rng: if given, start from a random vector
-        drawn from this generator instead of :func:`default_start`.
 
     :return: the value ``w = z^H A z`` and the maximiser ``z``.
     :rtype: tuple(complex, numpy.ndarray)
     '''
     A = np.asarray(A)
     if z_0 is None:
-        z_0 = default_start(A) if rng is None else _random_start(A.shape[0], rng)
+        z_0 = default_start(A)
     z = np.asarray(z_0, dtype=complex).ravel()
     z = z / np.sqrt(z.conj() @ z)
 
@@ -209,71 +198,7 @@ def simple_iteration(A, z_0=None, tol=1e-6, n_it_max=100, rng=None):
     return z.conj() @ A @ z, z
 
 
-def he_watson(A, tol=1e-6, n_it_max=500, rng=None):
-    '''
-    He & Watson's (1997) algorithm, which is guaranteed to find the global
-    optimum upon convergence.
-
-    :param numpy.ndarray A: square complex matrix.
-    :param float tol: convergence tolerance. Default is 1e-6.
-    :param int n_it_max: maximum number of iterations. Default is 500.
-    :param numpy.random.Generator rng: if given, start from a random vector
-        drawn from this generator instead of :func:`default_start`. A generator
-        is required for the restart-on-stall path; one is created if needed.
-
-    :return: the value ``w = z^H A z`` and the maximiser ``z``.
-    :rtype: tuple(complex, numpy.ndarray)
-    '''
-    A_in = np.asarray(A)
-    n = A_in.shape[0]
-    # as in mengi_overton, rescale so the unit-circle tolerance stays meaningful
-    A, _ = _pow2_scale(A_in)
-    norm_A = np.linalg.norm(A, 1)
-    if norm_A == 0.0:
-        z = np.zeros(n, dtype=complex)
-        z[0] = 1.0
-        return 0j, z
-    z = default_start(A) if rng is None else _random_start(n, rng)
-
-    zeros = np.zeros((n, n))
-    eye = np.eye(n)
-    S = np.block([[A, zeros], [zeros, eye]])
-
-    lb, ub = 0.0, norm_A
-    w_best, z_best = 0.0 + 0j, z
-    it = 0
-    while (ub - lb) > tol or it == 0:
-        it += 1
-        w, z = simple_iteration(A, z, tol=tol, n_it_max=n_it_max)
-        # the reference returns the last iterate; track the best one instead,
-        # since a restart or a stalled step can otherwise lose a better point
-        if np.abs(w) > np.abs(w_best):
-            w_best, z_best = w, z
-        lb = max(lb, np.abs(w))
-        alpha = lb + tol
-        R = np.block([[2 * alpha * eye, -A.conj().T], [eye, zeros]])
-        eigval, eigvec = sla.eig(R, S)
-        finite = np.isfinite(eigval)
-        on_circle = np.zeros(eigval.shape, dtype=bool)
-        on_circle[finite] = \
-            np.abs(np.abs(eigval[finite]) - 1) < (_SQRT_EPS * norm_A)
-        if not on_circle.any():
-            break
-        if it >= n_it_max:
-            break
-        if it % 100 == 0:
-            # stalled; restart from a fresh direction, as in the reference
-            if rng is None:
-                rng = np.random.default_rng(it)
-            z = _random_start(n, rng)
-        else:
-            z = eigvec[-n:, int(np.flatnonzero(on_circle)[0])]
-    nrm = np.linalg.norm(z_best)
-    z_best = z_best / nrm if nrm > 0 else z_best
-    return z_best.conj() @ A_in @ z_best, z_best
-
-
-def mengi_overton(A, tol=1e-6, n_it_max=500):
+def mengi_overton(A, tol=1e-8, n_it_max=500):
     '''
     Level-set algorithm of Mengi & Overton (2005) for the numerical radius.
     Globally convergent, deterministic, and the default solver.
@@ -287,7 +212,7 @@ def mengi_overton(A, tol=1e-6, n_it_max=500):
 
     :param numpy.ndarray A: square complex matrix.
     :param float tol: level inflation factor and stopping tolerance.
-        Default is 1e-6.
+        Default is 1e-8.
     :param int n_it_max: maximum number of level-set iterations. Default is 500.
 
     :return: the value ``w = z^H A z`` and the maximiser ``z``.
@@ -295,8 +220,9 @@ def mengi_overton(A, tol=1e-6, n_it_max=500):
     '''
     A_in = np.asarray(A)
     n = A_in.shape[0]
-    # work on a rescaled copy so the unit-circle tolerance below stays meaningful
-    A, _ = _pow2_scale(A_in)
+    # work on a rescaled copy so the unit-circle tolerance below stays
+    # meaningful; see _pow2_scale
+    A = _pow2_scale(A_in)
     norm_A = np.linalg.norm(A, 1)
     if norm_A == 0.0:
         z = np.zeros(n, dtype=complex)
@@ -323,7 +249,8 @@ def mengi_overton(A, tol=1e-6, n_it_max=500):
         on_circle = np.abs(np.abs(eigval) - 1) <= (_SQRT_EPS * norm_A)
         theta = np.angle(eigval[on_circle])
         if theta.size:
-            keep = np.abs(max_fov(A, theta) - w) <= _SQRT_EPS * max(w, 1.0)
+            level_tol = _SQRT_EPS * max(w, 1.0)
+            keep = np.abs(max_fov(A, theta) - w) <= level_tol
             theta = theta[keep]
         if theta.size == 0:
             break
@@ -352,32 +279,27 @@ def mengi_overton(A, tol=1e-6, n_it_max=500):
     return z.conj() @ A_in @ z, z
 
 
-def solve(A, solver='MengiOverton', tol=1e-6, n_it_max=500, rng=None, z0=None):
+def solve(A, solver='MengiOverton', tol=1e-8, n_it_max=500, z0=None):
     '''
     Maximise ``|z^H A z|`` over unit vectors ``z`` with the requested solver.
 
     :param numpy.ndarray A: square complex matrix.
-    :param str solver: one of 'MengiOverton', 'HeWatson', 'simpleIteration'.
+    :param str solver: one of 'MengiOverton', 'simpleIteration'.
         Default is 'MengiOverton'.
-    :param float tol: solver tolerance. Default is 1e-6.
+    :param float tol: solver tolerance. Default is 1e-8.
     :param int n_it_max: maximum number of iterations. Default is 500.
-    :param numpy.random.Generator rng: generator for solvers that need a random
-        start vector. Passing an explicit generator keeps results reproducible
-        and independent of how work is distributed across MPI ranks.
     :param numpy.ndarray z0: explicit start vector for the iterative solvers,
-        overriding both ``rng`` and :func:`default_start`. Mainly of use for
-        reproducing results from another implementation.
+        overriding :func:`default_start`. Mainly of use for reproducing
+        results from another implementation. Not supported by 'MengiOverton',
+        which is deterministic and needs no start vector.
 
     :return: the value ``w = z^H A z`` and the maximiser ``z``.
     :rtype: tuple(complex, numpy.ndarray)
     '''
     if solver == 'MengiOverton':
-        # deterministic and globally convergent: no start vector is needed
-        return mengi_overton(A, tol=tol, n_it_max=n_it_max)
-    elif solver == 'HeWatson':
         if z0 is not None:
-            raise ValueError('z0 is not supported by the HeWatson solver.')
-        return he_watson(A, tol=tol, n_it_max=n_it_max, rng=rng)
+            raise ValueError('z0 is not supported by the MengiOverton solver.')
+        return mengi_overton(A, tol=tol, n_it_max=n_it_max)
     elif solver == 'simpleIteration':
-        return simple_iteration(A, z_0=z0, tol=tol, n_it_max=n_it_max, rng=rng)
+        return simple_iteration(A, z_0=z0, tol=tol, n_it_max=n_it_max)
     raise ValueError(f'Unknown solver {solver!r}; must be one of {SOLVERS}.')

@@ -62,7 +62,6 @@ class Base():
         self._solver = params.get('solver', 'MengiOverton')
         self._solver_tol = params.get('tol', 1e-6)
         self._solver_n_it_max = params.get('n_it_max', 500)
-        self._seed = params.get('seed', None)
         # explicit start vector for the iterative solvers, used to reproduce
         # results from another implementation
         self._solver_z0 = params.get('solver_z0', None)
@@ -539,11 +538,9 @@ class Base():
             # quadratic term; (n_blocks, n_blocks)
             B = q_sum.conj().T @ (q_prod * weights) / self._n_blocks
 
-            rng = (None if self._seed is None
-                   else np.random.default_rng(self._seed + i))
             r, a = optimizers.solve(
                 B, solver=self._solver, tol=self._solver_tol,
-                n_it_max=self._solver_n_it_max, rng=rng, z0=self._solver_z0)
+                n_it_max=self._solver_n_it_max, z0=self._solver_z0)
 
             # the optimizer works in double precision regardless of the
             # requested dtype -- B is only (n_blocks, n_blocks), so the accuracy

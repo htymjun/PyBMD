@@ -109,7 +109,7 @@ the original MATLAB implementation.
 | `mean_type` | `'longtime'` | `'longtime'`, `'blockwise'`, `'zero'` |
 | `regions` | `[1, 2]` | regions of the bispectrum to compute, in 1..8 |
 | `max_freq_idx` | `None` | bound on `\|k\|` and `\|l\|`; default is Nyquist |
-| `solver` | `'MengiOverton'` | also `'HeWatson'`, `'simpleIteration'` |
+| `solver` | `'MengiOverton'` | also `'simpleIteration'` |
 | `tol` | `1e-6` | solver tolerance |
 | `n_it_max` | `500` | solver iteration cap |
 | `dtype` | `'double'` | `'double'` or `'single'` |

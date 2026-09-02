@@ -7,10 +7,14 @@ field of values
     r(A) = \\max_{\\|z\\|=1} |z^H A z|,
 
 which is the quantity maximised at every triad of the bispectral mode
-decomposition.  Two algorithms are provided:
+decomposition.  Three solvers are provided:
 
 - :func:`mengi_overton` -- level-set algorithm of Mengi & Overton (2005);
-  globally convergent, and the default.
+  globally convergent, and the default. ``matlab_compat=True`` (also
+  reachable as ``solver='MengiOvertonMATLAB'`` from :func:`solve`) reverts
+  the four deviations below and reproduces ``refs/bmd/bmd.m``'s own
+  ``MengiOverton`` instead -- see its docstring for when to use that and why
+  it is not the default.
 - :func:`simple_iteration` -- Watson's simple power iteration; cheap, but not
   guaranteed to find the global optimum.
 
@@ -22,10 +26,14 @@ decomposition.  Two algorithms are provided:
     Algorithm 1 is :func:`simple_iteration` here. A later revision of
     ``bmd.m`` (17-Aug-2023) replaced that default with Mengi & Overton's
     globally convergent level-set algorithm, which is what this module makes
-    the default too. He & Watson's algorithm itself is not ported: it is only
-    locally convergent per restart, and PyBMD has no use for a solver that
-    needs a random start vector to escape local optima when
-    :func:`mengi_overton` finds the global one directly and deterministically.
+    the default too. He & Watson's algorithm itself is not ported: on real
+    BMD matrices it collapses to one Watson simple iteration from a random
+    start (its unit-circle test has the same absolute-tolerance bug as
+    ``MengiOverton``'s -- see :func:`mengi_overton`'s docstring -- so its
+    outer level-set loop almost always exits on the first pass), and PyBMD
+    has no use for a solver that needs an unseeded random start vector, which
+    :func:`simple_iteration` already reproduces deterministically via
+    :func:`default_start`.
 '''
 import numpy as np
 import scipy.linalg as sla
@@ -34,13 +42,13 @@ import scipy.linalg as sla
 __all__ = ['solve', 'mengi_overton', 'simple_iteration', 'max_fov',
            'default_start', 'SOLVERS']
 
-SOLVERS = ('MengiOverton', 'simpleIteration')
+SOLVERS = ('MengiOverton', 'MengiOvertonMATLAB', 'simpleIteration')
 
 # unit-circle / level-set detection tolerance, as in the reference implementation
 _SQRT_EPS = np.sqrt(np.finfo(float).eps)
 
 
-def max_fov(A, theta):
+def max_fov(A, theta, signed=True):
     '''
     Maximum of the field of values of ``A`` in the direction ``theta``, that is
     the largest eigenvalue of the Hermitian part of the rotated matrix
@@ -53,27 +61,34 @@ def max_fov(A, theta):
     :param numpy.ndarray A: square complex matrix.
     :param theta: angle(s) at which to evaluate, in radians.
     :type theta: float or numpy.ndarray
+    :param bool signed: if True (default), return the *signed* largest
+        eigenvalue -- see the note below. If False, return the largest in
+        modulus, ``max(abs(eig(H)))``, matching ``refs/bmd/bmd.m``'s own
+        ``maxFOV``; only :func:`mengi_overton`'s ``matlab_compat=True`` path
+        uses this.
 
     :return: the maximum field of value at each angle.
     :rtype: numpy.ndarray
 
     .. note::
 
-        The *signed* largest eigenvalue is returned, not the largest in
-        modulus. Since the Hermitian part at ``theta + pi`` is the negative
-        of the one at ``theta``, both give the same maximum over all angles,
-        and so the same numerical radius.  They do not, however, give the
-        same *level sets*: the unimodular generalized eigenvalues located by
-        :func:`mengi_overton` are the angles at which the signed
+        The *signed* largest eigenvalue is returned by default, not the
+        largest in modulus. Since the Hermitian part at ``theta + pi`` is the
+        negative of the one at ``theta``, both give the same maximum over all
+        angles, and so the same numerical radius.  They do not, however, give
+        the same *level sets*: the unimodular generalized eigenvalues located
+        by :func:`mengi_overton` are the angles at which the signed
         ``lambda_max`` equals the current level, and filtering them with the
-        modulus would reject valid angles.
+        modulus would reject valid angles. ``signed=False`` reproduces the
+        reference's own (buggy, in this sense) behaviour instead.
     '''
     theta = np.atleast_1d(np.asarray(theta, dtype=float))
     out = np.empty(theta.shape[0], dtype=float)
     for i, th in enumerate(theta):
         A_rot = A * np.exp(1j * th)
         H = 0.5 * (A_rot + A_rot.conj().T)
-        out[i] = np.linalg.eigvalsh(H)[-1]
+        eigval = np.linalg.eigvalsh(H)
+        out[i] = eigval[-1] if signed else np.max(np.abs(eigval))
     return out
 
 
@@ -198,7 +213,7 @@ def simple_iteration(A, z_0=None, tol=1e-8, n_it_max=100):
     return z.conj() @ A @ z, z
 
 
-def mengi_overton(A, tol=1e-8, n_it_max=500):
+def mengi_overton(A, tol=1e-8, n_it_max=500, matlab_compat=False):
     '''
     Level-set algorithm of Mengi & Overton (2005) for the numerical radius.
     Globally convergent, deterministic, and the default solver.
@@ -214,15 +229,42 @@ def mengi_overton(A, tol=1e-8, n_it_max=500):
     :param float tol: level inflation factor and stopping tolerance.
         Default is 1e-8.
     :param int n_it_max: maximum number of level-set iterations. Default is 500.
+    :param bool matlab_compat: if True, revert the four deviations from
+        ``refs/bmd/bmd.m``'s own ``MengiOverton`` documented in ``CLAUDE.md``
+        and reproduce that function instead -- no ``_pow2_scale``, unsigned
+        (modulus) ``max_fov``, the level filter ``sqrt(eps)*w`` rather than
+        ``sqrt(eps)*max(w,1.0)``, and no pre-rounding before ``np.unique`` on
+        the crossing angles. Also reachable as ``solver='MengiOvertonMATLAB'``
+        via :func:`solve`.
+
+        This exists **only** to reproduce a specific published MATLAB result,
+        never to analyse new data with: because ``bmd.m``'s unimodularity
+        test is an *absolute* tolerance on a dimensionless quantity and real
+        BMD matrices are tiny (``B`` carries ``1/n_blocks`` and the spatial
+        weights), every genuine level-set crossing is rejected and the search
+        returns a local value at ``theta=0`` -- always an *under*-estimate,
+        confirmed live under Octave against the real ``bmd.m``/``cbmd.m`` (see
+        ``docs/octave_cross_validation.md``): 52/169 triads off by >1% (29 by
+        >10%) on the full cylinder-wake fixture. ``matlab_compat=True``
+        reproduces that under-estimate to ~4e-6 relative when ``B`` is
+        reasonably well scaled (``||B||_1 >~ 1e-6``); as ``||B||_1`` falls
+        toward the tolerance floor itself (``~1e-9`` and below, e.g. the
+        noise-free cases of the paper's hypothesis test) the branch decisions
+        it is reproducing sit exactly at the tolerance boundary, so agreement
+        degrades and is not a defect to chase further -- see
+        ``docs/octave_cross_validation.md`` for the measured figures.
 
     :return: the value ``w = z^H A z`` and the maximiser ``z``.
     :rtype: tuple(complex, numpy.ndarray)
     '''
+    signed = not matlab_compat
     A_in = np.asarray(A)
     n = A_in.shape[0]
     # work on a rescaled copy so the unit-circle tolerance below stays
-    # meaningful; see _pow2_scale
-    A = _pow2_scale(A_in)
+    # meaningful; see _pow2_scale. Skipped in matlab_compat mode, which
+    # reproduces the reference's un-rescaled (and, on real BMD data, broken)
+    # tolerance instead.
+    A = A_in if matlab_compat else _pow2_scale(A_in)
     norm_A = np.linalg.norm(A, 1)
     if norm_A == 0.0:
         z = np.zeros(n, dtype=complex)
@@ -237,7 +279,7 @@ def mengi_overton(A, tol=1e-8, n_it_max=500):
     it = 0
     while phi.size:
         # highest level found so far, and the angle attaining it
-        levels = max_fov(A, phi)
+        levels = max_fov(A, phi, signed=signed)
         i_max = int(np.argmax(levels))
         phi_max = phi[i_max]
         w = levels[i_max] * (1 + tol)
@@ -249,14 +291,15 @@ def mengi_overton(A, tol=1e-8, n_it_max=500):
         on_circle = np.abs(np.abs(eigval) - 1) <= (_SQRT_EPS * norm_A)
         theta = np.angle(eigval[on_circle])
         if theta.size:
-            level_tol = _SQRT_EPS * max(w, 1.0)
-            keep = np.abs(max_fov(A, theta) - w) <= level_tol
+            level_tol = _SQRT_EPS * w if matlab_compat else _SQRT_EPS * max(w, 1.0)
+            keep = np.abs(max_fov(A, theta, signed=signed) - w) <= level_tol
             theta = theta[keep]
         if theta.size == 0:
             break
         # np.unique sorts, which the interval sweep below relies on; round
         # first, as exact float equality would leave near-duplicates in place
-        theta = np.unique(np.round(theta, 10))
+        # (matlab_compat skips the rounding, matching bmd.m's plain unique())
+        theta = np.unique(theta) if matlab_compat else np.unique(np.round(theta, 10))
 
         # descend into every interval whose midpoint lies above the level
         candidates = []
@@ -265,7 +308,7 @@ def mengi_overton(A, tol=1e-8, n_it_max=500):
                 mid = 0.5 * (lower + theta[i + 1])
             else:
                 mid = np.mod(0.5 * (lower + theta[0] + 2 * np.pi), 2 * np.pi)
-            if max_fov(A, mid)[0] > w:
+            if max_fov(A, mid, signed=signed)[0] > w:
                 candidates.append(mid)
         phi = np.asarray(candidates, dtype=float)
 
@@ -284,22 +327,27 @@ def solve(A, solver='MengiOverton', tol=1e-8, n_it_max=500, z0=None):
     Maximise ``|z^H A z|`` over unit vectors ``z`` with the requested solver.
 
     :param numpy.ndarray A: square complex matrix.
-    :param str solver: one of 'MengiOverton', 'simpleIteration'.
-        Default is 'MengiOverton'.
+    :param str solver: one of 'MengiOverton', 'MengiOvertonMATLAB',
+        'simpleIteration'. Default is 'MengiOverton'. 'MengiOvertonMATLAB'
+        reproduces ``refs/bmd/bmd.m``'s own (under-estimating) solver -- see
+        :func:`mengi_overton`'s ``matlab_compat`` parameter for when to use
+        it and why it is not the default.
     :param float tol: solver tolerance. Default is 1e-8.
     :param int n_it_max: maximum number of iterations. Default is 500.
     :param numpy.ndarray z0: explicit start vector for the iterative solvers,
         overriding :func:`default_start`. Mainly of use for reproducing
-        results from another implementation. Not supported by 'MengiOverton',
-        which is deterministic and needs no start vector.
+        results from another implementation. Not supported by either
+        Mengi-Overton variant, which are deterministic and need no start
+        vector.
 
     :return: the value ``w = z^H A z`` and the maximiser ``z``.
     :rtype: tuple(complex, numpy.ndarray)
     '''
-    if solver == 'MengiOverton':
+    if solver in ('MengiOverton', 'MengiOvertonMATLAB'):
         if z0 is not None:
-            raise ValueError('z0 is not supported by the MengiOverton solver.')
-        return mengi_overton(A, tol=tol, n_it_max=n_it_max)
+            raise ValueError(f'z0 is not supported by the {solver} solver.')
+        return mengi_overton(A, tol=tol, n_it_max=n_it_max,
+                             matlab_compat=(solver == 'MengiOvertonMATLAB'))
     elif solver == 'simpleIteration':
         return simple_iteration(A, z_0=z0, tol=tol, n_it_max=n_it_max)
     raise ValueError(f'Unknown solver {solver!r}; must be one of {SOLVERS}.')

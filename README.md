@@ -109,7 +109,7 @@ the original MATLAB implementation.
 | `mean_type` | `'longtime'` | `'longtime'`, `'blockwise'`, `'zero'` |
 | `regions` | `[1, 2]` | regions of the bispectrum to compute, in 1..8 |
 | `max_freq_idx` | `None` | bound on `\|k\|` and `\|l\|`; default is Nyquist |
-| `solver` | `'MengiOverton'` | also `'simpleIteration'` |
+| `solver` | `'MengiOverton'` | also `'MengiOvertonMATLAB'`, `'simpleIteration'` |
 | `tol` | `1e-6` | solver tolerance |
 | `n_it_max` | `500` | solver iteration cap |
 | `dtype` | `'double'` | `'double'` or `'single'` |
@@ -150,6 +150,13 @@ departures, each of which changes results:
 `solver='simpleIteration'` reproduces the reference's only solver. It is not globally
 convergent — on random matrices it under-estimated the numerical radius in 14 of 40 cases, worst
 case 62 % low — so `MengiOverton` is the default.
+
+`solver='MengiOvertonMATLAB'` reverts deviations 1 and 2 above (and the level-set filter's
+`sqrt(eps)*w` tolerance) to reproduce `bmd.m`'s own `MengiOverton` bug-for-bug, confirmed live
+against the real MATLAB source under Octave to a few micro-relative on well-scaled problems. It
+exists **only** to reproduce a specific published MATLAB result — it reproduces a confirmed
+under-estimation bug and should never be used to analyse new data. See `docs/octave_cross_validation.md`
+for the measured figures and `pybmd.bmd.optimizers.mengi_overton`'s docstring for the caveats.
 
 ## Testing
 

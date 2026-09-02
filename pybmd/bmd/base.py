@@ -290,7 +290,12 @@ class Base():
             self._n_overlap = int(self._n_overlap_req)
             self._overlap = 100.0 * self._n_overlap / self._n_dft
         else:
-            self._n_overlap = int(np.ceil(self._n_dft * self._overlap / 100))
+            # floor, not ceil/round: matches the reference's own
+            # nOvlp = floor(nDFT/2) (bmd.m:268) at the 50% default, and for
+            # any percentage that does not divide n_dft evenly -- ceil would
+            # silently pick a different n_overlap (hence n_blocks) than the
+            # reference on the same request.
+            self._n_overlap = int(np.floor(self._n_dft * self._overlap / 100))
         if self._n_overlap > self._n_dft - 1:
             raise ValueError('Overlap is too large.')
 
@@ -694,8 +699,15 @@ class Base():
         self._pr0(f'Max frequency index      : {self._max_freq_idx} '
                   f'(Nyquist index {self._triads.f_nyq_idx})')
         self._pr0(f'Number of triads         : {self.n_triads}')
+        # flag the bug-compatible solver loudly: it exists only to reproduce
+        # a specific published MATLAB result and always under-estimates, so
+        # a run must not be able to use it silently
+        compat_note = (' [MATLAB-COMPATIBLE: reproduces refs/bmd/bmd.m\'s '
+                       'known under-estimation bug -- see optimizers.py]'
+                       if self._solver == 'MengiOvertonMATLAB' else '')
         self._pr0(f'Solver (x*Ax)            : {self._solver} '
-                  f'(tol {self._solver_tol}, n_it_max {self._solver_n_it_max})')
+                  f'(tol {self._solver_tol}, n_it_max {self._solver_n_it_max})'
+                  f'{compat_note}')
         self._pr0(f'MPI ranks                : {self._size}')
         self._pr0(f'Results to be saved in   : {self._savedir}')
         self._pr0(f'------------------------------------')

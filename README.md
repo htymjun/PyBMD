@@ -78,6 +78,21 @@ plot_mode_bispectrum(bmd.L, bmd.freq)
 plot_triad_modes(bmd.get_modes_at_triad(i), k=5, l=-2, x1=x[:, 0], x2=y[0, :])
 ```
 
+Visualizing an existing results directory:
+
+```python
+from pybmd.bmd.postproc import (
+    load_results, top_triads, plot_mode_bispectrum_from_dir,
+    plot_triad_modes_from_dir,
+)
+
+results = load_results('bmd_results/nfft256_novlp128_nblks9')
+top = top_triads(results, n=5)
+plot_mode_bispectrum_from_dir(results.path)
+plot_triad_modes_from_dir(results.path, triad_idx=int(top[0]['triad_idx']),
+                          x1=x[:, 0], x2=y[0, :])
+```
+
 Running in parallel — the triad loop is distributed across ranks and results are identical to a
 serial run:
 

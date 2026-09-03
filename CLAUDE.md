@@ -45,7 +45,7 @@ directory.
 Bispectral mode decomposition, ported from O. T. Schmidt's MATLAB `bmd.m`/`cbmd.m`, structured
 like [PySPOD](https://github.com/MathEXLab/PySPOD) for conventions. BMD finds triads `(k, l, k+l)`
 whose components are quadratically phase coupled, and returns a mode bispectrum `L` plus two modes
-per triad.
+per triad (optionally four, with `constituent_modes` adding the modes at `k` and `l` themselves).
 
 The implementation (`pybmd/bmd/`) — the Base/Standard/Cross split, data flow, invariants that are
 easy to break, the ported-solver deviations from the MATLAB reference, and data conventions — is

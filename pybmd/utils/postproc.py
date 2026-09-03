@@ -48,7 +48,8 @@ def get_modes_at_triad(results_path, triad_idx):
     :param str results_path: the ``savedir_sim`` of a fitted decomposition.
     :param int triad_idx: index into the per-triad arrays.
 
-    :return: the modes, of shape ``(2, *xshape, nv)``.
+    :return: the modes, of shape ``(n_comp, *xshape, nv)``, where ``n_comp``
+        is 2, or 4 if the run was fit with ``params['constituent_modes']``.
     :rtype: numpy.ndarray
     '''
     path = os.path.join(results_path, 'modes',
@@ -64,7 +65,9 @@ def get_all_modes(results_path):
 
     :param str results_path: the ``savedir_sim`` of a fitted decomposition.
 
-    :return: the modes, of shape ``(n_saved, 2, *xshape, nv)``.
+    :return: the modes, of shape ``(n_saved, n_comp, *xshape, nv)``, where
+        ``n_comp`` is 2, or 4 if the run was fit with
+        ``params['constituent_modes']``.
     :rtype: numpy.ndarray
     '''
     modes_dir = os.path.join(results_path, 'modes')

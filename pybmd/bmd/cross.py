@@ -50,6 +50,11 @@ class Cross(Base):
                 'purely spatial and have no variable axis to normalize '
                 'variable-wise (the reference cbmd.m has no such option '
                 'either). Use normalize_data, or pass pre-scaled weights.')
+        if self._constituent_modes:
+            raise ValueError(
+                'constituent_modes is not supported by Cross: the quadratic '
+                'term sums n_terms q*r pairs, so no single constituent mode '
+                'phi_k or phi_l is well defined.')
 
     @property
     def n_state(self):
@@ -100,7 +105,7 @@ class Cross(Base):
         scramble the modes, so unflatten as ``(n_state, *xshape)`` first and
         move the state axis last.
         '''
-        psi = psi.reshape((2, self.n_state, *self._xshape))
+        psi = psi.reshape((psi.shape[0], self.n_state, *self._xshape))
         return np.moveaxis(psi, 1, -1)
 
     def fit(self, data_list):

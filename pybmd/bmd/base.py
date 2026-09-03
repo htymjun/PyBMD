@@ -97,6 +97,10 @@ class Base():
         self._save_modes = params.get('save_modes', True)
         self._store_modes = params.get('store_modes', False)
         self._max_modes_gb = params.get('max_modes_gb', 8.0)
+        # opt-in: also compute and store the two constituent modes phi_k,
+        # phi_l alongside the sum and quadratic-term modes
+        self._constituent_modes = params.get('constituent_modes', False)
+        self._n_mode_comp = 4 if self._constituent_modes else 2
         self._compute_transfer = params.get('compute_energy_transfer', True)
 
         # a copy: the run records derived quantities (n_blocks, the results
@@ -162,6 +166,18 @@ class Base():
         '''
         raise NotImplementedError  # pragma: no cover
 
+    def _constituent_matrices(self, q_hat, i_triad):
+        '''
+        Assemble the two ``(n, n_blocks)`` matrices for the constituent
+        frequencies ``k`` and ``l`` of a triad, used only when
+        ``params['constituent_modes']`` is set.
+
+        :return: ``(q_k, q_l)``, on the same flat axis as ``q_sum`` in
+            :meth:`_triad_matrices`, so the triad's own expansion vector
+            ``a`` applies unchanged.
+        '''
+        raise NotImplementedError  # pragma: no cover
+
     def _expected_weights_shape(self):
         '''Shape a user weight array must have: spatial shape plus variables.'''
         return tuple(self._xshape) + (self._nv,)
@@ -173,14 +189,16 @@ class Base():
 
     def _unflatten_modes(self, psi):
         '''
-        Reshape the two flat modes ``(2, n)`` of a triad to ``(2, *mode_shape)``.
+        Reshape the flat modes ``(n_comp, n)`` of a triad to
+        ``(n_comp, *mode_shape)``, where ``n_comp`` is 2 (sum, quadratic-term)
+        or 4 with ``params['constituent_modes']`` (plus phi_k, phi_l).
 
         The flat axis is the one :meth:`_triad_matrices` builds. Here it is
         the C-order flattening of ``(*xshape, nv)``, so a plain reshape undoes
         it; a subclass that stacks that axis in a different order must override
         this, or its modes come out scrambled while ``L`` stays correct.
         '''
-        return psi.reshape((2, *self._mode_shape))
+        return psi.reshape((psi.shape[0], *self._mode_shape))
 
     # --------------------------------------------------------------------------
     # basic getters
@@ -324,8 +342,9 @@ class Base():
     @property
     def modes(self):
         '''
-        All modes, of shape ``(n_triads, 2, *xshape, nv)``. Only available when
-        ``store_modes`` was set.
+        All modes, of shape ``(n_triads, n_comp, *xshape, nv)`` where
+        ``n_comp`` is 2, or 4 with ``params['constituent_modes']`` set. Only
+        available when ``store_modes`` was set.
         '''
         if not self._store_modes:
             raise ValueError(
@@ -442,7 +461,8 @@ class Base():
         self._qhat_size_gb = (self._triads.freq_needed.size * self._nxv
                               * self._n_blocks
                               * self._complex(1).nbytes * B2GB)
-        self._modes_size_gb = (2 * self.n_triads * self._mode_elements()
+        self._modes_size_gb = (self._n_mode_comp * self.n_triads
+                               * self._mode_elements()
                                * self._complex(1).nbytes * B2GB)
         if ((self._save_modes or self._store_modes)
                 and self._modes_size_gb > self._max_modes_gb):
@@ -612,7 +632,8 @@ class Base():
         coeffs = np.zeros((n_triads, self._n_blocks), dtype=self._complex)
         if self._store_modes:
             self._modes = np.zeros(
-                (n_triads, 2, *self._mode_shape), dtype=self._complex)
+                (n_triads, self._n_mode_comp, *self._mode_shape),
+                dtype=self._complex)
 
         my_triads = utils_par.distribute_indices(n_triads, self._comm)
         st = time.time()
@@ -643,9 +664,15 @@ class Base():
             coeffs[i, :] = a
 
             if self._store_modes or self._save_modes:
-                psi = self._unflatten_modes(np.stack(
-                    [utils_bmd.normalize_mode(psi_sum, weights),
-                     utils_bmd.normalize_mode(psi_prod, weights)]))
+                mode_stack = [utils_bmd.normalize_mode(psi_sum, weights),
+                             utils_bmd.normalize_mode(psi_prod, weights)]
+                if self._constituent_modes:
+                    q_k, q_l = self._constituent_matrices(q_hat, i)
+                    mode_stack.append(
+                        utils_bmd.normalize_mode(q_k @ a, weights))
+                    mode_stack.append(
+                        utils_bmd.normalize_mode(q_l @ a, weights))
+                psi = self._unflatten_modes(np.stack(mode_stack))
                 if self._store_modes:
                     self._modes[i] = psi
                 if self._save_modes:
@@ -675,7 +702,7 @@ class Base():
         utils_par.barrier(self._comm)
 
     def _save_modes_at_triad(self, i_triad, psi):
-        '''Write the two modes ``(2, *mode_shape)`` of one triad to
+        '''Write the modes ``(n_comp, *mode_shape)`` of one triad to
         ``modes/triad_idx_{i:08d}.npy``.'''
         path = os.path.join(self._modes_dir, f'triad_idx_{i_triad:08d}.npy')
         np.save(path, psi)
@@ -687,9 +714,13 @@ class Base():
         :param int triad_idx: index into the per-triad arrays, as returned by
             ``self.triads.find(k, l)``.
 
-        :return: the modes, of shape ``(2, *xshape, nv)`` (``n_state`` in
-            place of ``nv`` for :class:`~pybmd.bmd.cross.Cross`). Index 0 is
-            the sum-interaction mode and index 1 the quadratic-term mode.
+        :return: the modes, of shape ``(n_comp, *xshape, nv)`` (``n_state`` in
+            place of ``nv`` for :class:`~pybmd.bmd.cross.Cross`). ``n_comp`` is
+            2, or 4 with ``params['constituent_modes']`` set. Index 0 is the
+            sum-interaction mode :math:`\\phi_{k+l}` and index 1 the
+            quadratic-term mode :math:`\\phi_{k \\circ l}`; with
+            ``constituent_modes``, indices 2 and 3 are the constituent modes
+            :math:`\\phi_k` and :math:`\\phi_l`.
         :rtype: numpy.ndarray
         '''
         if self._store_modes:
@@ -708,7 +739,8 @@ class Base():
         :param int k: integer frequency index of f1.
         :param int l: integer frequency index of f2.
 
-        :return: the modes, of shape ``(2, *xshape, nv)``.
+        :return: the modes, of shape ``(n_comp, *xshape, nv)``. See
+            :meth:`get_modes_at_triad` for ``n_comp`` and the index order.
         :rtype: numpy.ndarray
         '''
         return self.get_modes_at_triad(self._triads.find(k, l))
@@ -768,6 +800,7 @@ class Base():
         self._pr0(f'Problem size (real)      : {self._pb_size_f:.2f} GB')
         self._pr0(f'Q_hat size               : {self._qhat_size_gb:.2f} GB')
         self._pr0(f'Modes size (all triads)  : {self._modes_size_gb:.2f} GB')
+        self._pr0(f'Constituent modes        : {self._constituent_modes}')
         self._pr0(f'Data type for real       : {self._float}')
         self._pr0(f'Data type for complex    : {self._complex}')
         self._pr0(f'No. snapshots per block  : {self._n_dft}')

@@ -88,6 +88,14 @@ def test_normalize_weights_is_rejected(tmp_path):
         Cross(params=_params(tmp_path, n_variables=3, normalize_weights=True))
 
 
+def test_constituent_modes_is_rejected(tmp_path):
+    '''CBMD's quadratic term sums n_terms q*r pairs, so no single mode phi_k
+    or phi_l is well defined; this must fail before any work, like the
+    normalize_weights rejection above.'''
+    with pytest.raises(ValueError, match='constituent_modes'):
+        Cross(params=_params(tmp_path, n_variables=3, constituent_modes=True))
+
+
 def test_non_dict_weights_fall_back_to_uniform_with_a_warning(tmp_path):
     s = _signal()
     data = np.stack([s, s, s], axis=-1)

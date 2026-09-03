@@ -12,6 +12,7 @@ and storage. **Subclasses override only three things**, so the algorithm lives i
 | | `Standard` (BMD) | `Cross` (CBMD) |
 | --- | --- | --- |
 | `_triad_matrices(q_hat, i)` | returns `(Q3, Q1*Q2, weights)` | stacks `n_state` blocks; sums the `q*r` terms |
+| `_constituent_matrices(q_hat, i)` | returns `(Q1, Q2)` (only with `constituent_modes`) | not supported — rejected at construction |
 | `_compute_qhat` block shape | `(nx*nv,)` | `(nx, nv)` so `q_hat[f][:, v]` is contiguous |
 | `define_weights` | `(*xshape, nv)` | overridden: `xshape`, **no variable axis** |
 
@@ -58,8 +59,18 @@ some triad actually references. With `max_freq_idx` set that is a small fraction
   variable axis, so `Cross` rejects it at construction (the reference has no such option).
   `apply_normalization` returns a *copy* — the caller's weights dict must survive a `fit()`.
   `normalize_data` standardizes each point and variable within a block by its standard deviation.
-- **`store_modes` costs as much as `save_modes`, on every rank** (the full `(n_triads, 2,
-  *mode_shape)` array plus its `allreduce` buffer); the `max_modes_gb` guard covers both.
+- **`store_modes` costs as much as `save_modes`, on every rank** (the full `(n_triads, n_comp,
+  *mode_shape)` array plus its `allreduce` buffer, `n_comp` being 2 or 4 with
+  `constituent_modes`); the `max_modes_gb` guard covers both.
+- **`constituent_modes` is a PyBMD addition, not a reference feature.** `bmd.m` allocates
+  `P = zeros(2,nTriads,nx)` and never forms a mode from `Q_hat_f1*a` or `Q_hat_f2*a` alone — only
+  their product feeds `B` and `psi_prod`. Setting `params['constituent_modes'] = True` appends
+  `phi_k = normalize(Q1 @ a)` and `phi_l = normalize(Q2 @ a)` as modes 2 and 3, using the triad's
+  own expansion vector `a`; existing indices 0 (`phi_{k+l}`) and 1 (`phi_{k o l}`) are unchanged.
+  Note `phi_{k o l} != phi_k * phi_l` pointwise — `(Q1*Q2) @ a != (Q1 @ a) * (Q2 @ a)` — so the two
+  new modes are independent information, not a decomposition of the existing product mode.
+  `Standard` only: `Cross` rejects the flag at construction, since CBMD's quadratic term sums
+  `n_terms` `q*r` pairs and no single constituent mode is well defined for `n_terms > 1`.
 
 ## Deviations from the MATLAB reference — do not revert these
 

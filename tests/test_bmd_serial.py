@@ -21,7 +21,7 @@ import pytest
 
 from pybmd.bmd import utils as bmd_utils
 from pybmd.bmd.postproc import load_results, plot_energy_transfer
-from pybmd.bmd.postproc import plot_mode_bispectrum
+from pybmd.bmd.postproc import plot_mode_bispectrum, plot_triad_modes
 from pybmd.bmd.standard import Standard
 from pybmd.utils.postproc import get_all_modes
 import pybmd.utils.weights as utils_weights
@@ -123,6 +123,42 @@ def test_bispectrum_matches_closed_form(tmp_path):
     assert _correlation(psi_sum, comps[8][1]) == pytest.approx(1.0, abs=1e-12)
     assert _correlation(psi_prod, comps[3][1] * comps[5][1]) == \
         pytest.approx(1.0, abs=1e-12)
+
+
+def test_constituent_modes_match_closed_form(tmp_path):
+    '''With ``constituent_modes``, the two extra modes are the spatial
+    patterns of the triad's own frequency components ``k`` and ``l``.'''
+    n_dft = 32
+    data, comps = coupled_signal(n_dft=n_dft)
+    weights = utils_weights.trapz_2d(
+        np.cumsum(np.linspace(1.0, 2.0, XSHAPE[0])),
+        np.cumsum(np.linspace(1.0, 1.5, XSHAPE[1])), n_vars=1)
+    bmd = Standard(
+        params=_params(tmp_path, n_dft=n_dft, n_overlap=0, window='boxcar',
+                       regions=[1, 2, 3, 4, 5, 6, 7, 8], max_freq_idx=10,
+                       store_modes=True, constituent_modes=True),
+        weights=weights).fit(data)
+
+    assert bmd.modes.shape[1] == 4
+    i = bmd.triads.find(5, 3)
+    psi_sum, psi_prod, psi_k, psi_l = bmd.get_modes_at_triad(i)
+    assert _correlation(psi_sum, comps[8][1]) == pytest.approx(1.0, abs=1e-12)
+    assert _correlation(psi_prod, comps[3][1] * comps[5][1]) == \
+        pytest.approx(1.0, abs=1e-12)
+    assert _correlation(psi_k, comps[5][1]) == pytest.approx(1.0, abs=1e-12)
+    assert _correlation(psi_l, comps[3][1]) == pytest.approx(1.0, abs=1e-12)
+
+
+def test_constituent_modes_are_opt_in(tmp_path):
+    '''Default runs keep the 2-mode axis; the flag is required for 4.'''
+    data = _random_data()
+    default = Standard(params=_params(tmp_path / 'default',
+                                      store_modes=True)).fit(data)
+    assert default.modes.shape[1] == 2
+    with_flag = Standard(params=_params(tmp_path / 'with_flag',
+                                        store_modes=True,
+                                        constituent_modes=True)).fit(data)
+    assert with_flag.modes.shape[1] == 4
 
 
 def test_conjugate_symmetry(tmp_path):
@@ -311,3 +347,47 @@ def test_plot_mode_bispectrum_saves_on_user_axes(tmp_path):
     assert os.path.exists(tmp_path / 'L.png')
     assert plt.fignum_exists(fig.number)      # a caller-owned figure stays open
     plt.close(fig)
+
+
+def _fake_modes(n_comp, n1=6, n2=5, nv=1, seed=0):
+    rng = np.random.default_rng(seed)
+    return (rng.standard_normal((n_comp, n1, n2, nv))
+           + 1j * rng.standard_normal((n_comp, n1, n2, nv)))
+
+
+def test_plot_triad_modes_two_components(tmp_path):
+    import matplotlib
+    matplotlib.use('Agg')
+    modes = _fake_modes(2)
+    fig = plot_triad_modes(modes, k=5, l=-2, path=str(tmp_path),
+                           filename='modes.png')
+    assert os.path.exists(tmp_path / 'modes.png')
+    assert len(fig.axes) == 2 * 3          # 3 rows, one contour + one colorbar each
+    assert fig._suptitle.get_text() == r'$(k,l,k{+}l) = (5,-2,3)$'
+
+
+def test_plot_triad_modes_four_components(tmp_path):
+    '''With constituent_modes, two rows are prepended and the interaction map
+    still multiplies modes 0 and 1 (the sum and quadratic-term modes), not
+    whatever ends up in the first two rows of the figure.'''
+    import matplotlib
+    matplotlib.use('Agg')
+    modes = _fake_modes(4)
+    fig = plot_triad_modes(modes, k=5, l=-2, path=str(tmp_path),
+                           filename='modes4.png')
+    assert os.path.exists(tmp_path / 'modes4.png')
+    assert len(fig.axes) == 2 * 5          # 5 rows now: contour axes, then colorbars
+    titles = [ax.get_title() for ax in fig.axes[:5]]
+    assert titles[0].startswith(r'$\phi_k$')
+    assert titles[1].startswith(r'$\phi_l$')
+    assert titles[2].startswith(r'$\phi_{k+l}$')
+    assert titles[3].startswith(r'$\phi_{k \circ l}$')
+    assert titles[4].startswith(r'$|\phi_{k \circ l} \cdot \phi_{k+l}|$')
+
+    # the interaction-map row must be the product of modes 0 and 1 regardless
+    # of the two rows now in front of it
+    expected = np.abs(modes[0, ..., 0] * modes[1, ..., 0])
+    prod_ax = fig.axes[4]
+    np.testing.assert_allclose(
+        np.sort(prod_ax.collections[0].levels),
+        np.sort(np.max(np.abs(expected)) * np.linspace(0, 1, 257)))

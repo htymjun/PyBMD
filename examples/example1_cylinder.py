@@ -36,6 +36,7 @@ def main(save_dir='example1_out'):
         regions=[1, 2],          # sum- and difference-interactions
         max_freq_idx=12,         # restrict to |k|, |l| <= 12
         solver='MengiOverton',
+        constituent_modes=True,  # also plot phi_k, phi_l alongside phi_{k+l}, phi_{k.l}
         savedir=save_dir,
     )
     weights = utils_weights.trapz_2d(x[:, 0], y[0, :], n_vars=1)

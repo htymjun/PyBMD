@@ -74,3 +74,12 @@ class Standard(Base):
         q2 = q_hat[int(t.f2_idx[i_triad])]
         q3 = q_hat[int(t.f3_idx[i_triad])]
         return q3, q1 * q2, self._weights
+
+    def _constituent_matrices(self, q_hat, i_triad):
+        '''
+        :return: ``(q_k, q_l)``, the DFT rows at ``f1`` and ``f2``, of shape
+            ``(nx*nv, n_blocks)``.
+        :rtype: tuple(numpy.ndarray, numpy.ndarray)
+        '''
+        t = self._triads
+        return q_hat[int(t.f1_idx[i_triad])], q_hat[int(t.f2_idx[i_triad])]

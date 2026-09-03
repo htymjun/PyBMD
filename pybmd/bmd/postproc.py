@@ -340,20 +340,25 @@ def plot_energy_transfer(T, freq, **kwargs):
 
 
 def plot_triad_modes(modes, k, l, x1=None, x2=None, vars_idx=(0,),
-                     cmap='RdBu_r', cmap_prod='bone_r', figsize=(10, 9),
+                     cmap='RdBu_r', cmap_prod='bone_r', figsize=None,
                      facecolor=None, xlim=None, ylim=None,
                      xlabel=r'$x_1$', ylabel=r'$x_2$',
                      tight_layout=True, extend='both', extendrect=True,
                      path=None, filename=None):
     '''
-    Plot the two bispectral modes of a triad and their interaction map.
+    Plot the bispectral modes of a triad and their interaction map.
 
-    Rows are the sum-interaction mode :math:`\\phi_{k+l}`, the quadratic-term
-    mode :math:`\\phi_{k \\circ l}`, and the magnitude of their product, which
-    localizes where the triadic interaction takes place. Columns are variables.
+    With the default two modes per triad, rows are the sum-interaction mode
+    :math:`\\phi_{k+l}`, the quadratic-term mode :math:`\\phi_{k \\circ l}`,
+    and the magnitude of their product, which localizes where the triadic
+    interaction takes place. With ``params['constituent_modes']`` set when
+    fitting (four modes per triad), two more rows come first: the constituent
+    modes :math:`\\phi_k` and :math:`\\phi_l` at the triad's own frequencies.
+    Columns are variables.
 
     :param numpy.ndarray modes: modes of one triad, of shape
-        ``(2, n1, n2, nv)``, as returned by ``get_modes_at_triad``.
+        ``(2, n1, n2, nv)`` or ``(4, n1, n2, nv)``, as returned by
+        ``get_modes_at_triad``.
     :param int k: integer frequency index of f1, used for the title.
     :param int l: integer frequency index of f2, used for the title.
     :param numpy.ndarray x1: first coordinate. Default is the index.
@@ -361,6 +366,8 @@ def plot_triad_modes(modes, k, l, x1=None, x2=None, vars_idx=(0,),
     :param vars_idx: variables to plot.
     :param facecolor: background color for the figure and axes. Default is
         None, leaving Matplotlib's default unchanged.
+    :param figsize: figure size. Default is ``(10, 9)`` for two modes and
+        ``(10, 15)`` for four.
     :param xlim: x-axis limits. Default is Matplotlib's auto limits.
     :param ylim: y-axis limits. Default is Matplotlib's auto limits.
     :param str xlabel: x-axis label. Default is ``'$x_1$'``.
@@ -376,30 +383,44 @@ def plot_triad_modes(modes, k, l, x1=None, x2=None, vars_idx=(0,),
     '''
     import matplotlib.pyplot as plt
 
-    if modes.ndim != 4:
+    if modes.ndim != 4 or modes.shape[0] not in (2, 4):
         raise ValueError(
-            f'plot_triad_modes needs modes of shape (2, n1, n2, nv); got '
-            f'{modes.shape}. Only two-dimensional data can be contoured.')
+            f'plot_triad_modes needs modes of shape (2, n1, n2, nv) or '
+            f'(4, n1, n2, nv); got {modes.shape}. Only two-dimensional data '
+            f'can be contoured.')
+    has_constituents = modes.shape[0] == 4
+    if figsize is None:
+        figsize = (10, 15) if has_constituents else (10, 9)
     vars_idx = list(vars_idx)
     if x1 is None:
         x1 = np.arange(modes.shape[1])
     if x2 is None:
         x2 = np.arange(modes.shape[2])
 
-    titles = [r'$\phi_{k+l}$', r'$\phi_{k \circ l}$',
-              r'$|\phi_{k \circ l} \cdot \phi_{k+l}|$']
-    fig, axes = plt.subplots(3, len(vars_idx), figsize=figsize, squeeze=False)
+    # rows, keyed into `modes` by name rather than position, so inserting the
+    # constituent rows ahead of the interaction map can't silently mis-scale
+    # it against the wrong row
+    rows = []
+    if has_constituents:
+        rows += [(r'$\phi_k$', 2, 'signed'), (r'$\phi_l$', 3, 'signed')]
+    rows += [(r'$\phi_{k+l}$', 0, 'signed'),
+             (r'$\phi_{k \circ l}$', 1, 'signed'),
+             (r'$|\phi_{k \circ l} \cdot \phi_{k+l}|$', 'prod', 'mag')]
+
+    fig, axes = plt.subplots(len(rows), len(vars_idx), figsize=figsize,
+                             squeeze=False)
     if facecolor is not None:
         fig.patch.set_facecolor(facecolor)
     for c, iv in enumerate(vars_idx):
-        fields = [np.real(modes[0, ..., iv]),
-                  np.real(modes[1, ..., iv]),
-                  np.abs(modes[0, ..., iv] * modes[1, ..., iv])]
-        for r, field in enumerate(fields):
+        for r, (title, comp, kind) in enumerate(rows):
+            if kind == 'mag':
+                field = np.abs(modes[0, ..., iv] * modes[1, ..., iv])
+            else:
+                field = np.real(modes[comp, ..., iv])
             ax = axes[r][c]
             if facecolor is not None:
                 ax.set_facecolor(facecolor)
-            if r < 2:
+            if kind == 'signed':
                 lv, cm = _symmetric_levels(field), cmap
             else:
                 m = np.max(np.abs(field)) or 1.0
@@ -413,7 +434,7 @@ def plot_triad_modes(modes, k, l, x1=None, x2=None, vars_idx=(0,),
             if ylim is not None:
                 ax.set_ylim(ylim)
             ax.set_aspect('equal')
-            ax.set_title(f'{titles[r]}  var {iv}')
+            ax.set_title(f'{title}  var {iv}')
             fig.colorbar(im, ax=ax, extendrect=extendrect)
     fig.suptitle(triad_label(k, l))
     if tight_layout:

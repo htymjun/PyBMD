@@ -70,6 +70,10 @@ i = bmd.triads.find(k=5, l=-2)
 psi_sum, psi_prod = bmd.get_modes_at_triad(i)   # phi_{k+l}, phi_{k o l}
 ```
 
+Set `params['constituent_modes'] = True` (`Standard` only) to also compute the two modes at the
+triad's own constituent frequencies, `phi_k` and `phi_l`; `get_modes_at_triad` then returns four
+modes, `(phi_{k+l}, phi_{k o l}, phi_k, phi_l)`, and `plot_triad_modes` draws two extra rows.
+
 Plotting:
 
 ```python

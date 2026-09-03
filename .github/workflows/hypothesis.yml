@@ -1,0 +1,29 @@
+name: hypothesis tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  hypothesis:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: setup.cfg
+
+      - run: python -m pip install --upgrade pip
+      - run: pip install -e '.[test]'
+
+      - run: pytest tests/test_hypothesis.py -q

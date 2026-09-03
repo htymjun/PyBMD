@@ -51,7 +51,9 @@ def allreduce(data, comm):
     if comm is None:
         return data
     MPI = _get_module_MPI(comm)
-    data = data.view(data.dtype.newbyteorder('='))
+    # MPI needs a contiguous native-endian buffer; astype/ascontiguousarray
+    # convert the values, where a .view() would only reinterpret the bytes
+    data = np.ascontiguousarray(data, dtype=data.dtype.newbyteorder('='))
     reduced = np.zeros_like(data)
     comm.Barrier()
     comm.Allreduce(data, reduced, op=MPI.SUM)

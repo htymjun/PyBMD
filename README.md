@@ -121,13 +121,15 @@ the original MATLAB implementation.
 | `overlap` | `50` | block overlap, in **percent** |
 | `n_overlap` | — | block overlap in snapshots; takes precedence over `overlap` |
 | `window` | `'hamming'` | `'hamming'`, `'hann'`, `'boxcar'`, or an array |
-| `mean_type` | `'longtime'` | `'longtime'`, `'blockwise'`, `'zero'` |
+| `mean_type` | `'longtime'` | `'longtime'`, `'blockwise'`, `'zero'` (alias `'none'`) |
 | `regions` | `[1, 2]` | regions of the bispectrum to compute, in 1..8 |
 | `max_freq_idx` | `None` | bound on `\|k\|` and `\|l\|`; default is Nyquist |
 | `solver` | `'MengiOverton'` | also `'MengiOvertonMATLAB'`, `'simpleIteration'` |
 | `tol` | `1e-6` | solver tolerance |
 | `n_it_max` | `500` | solver iteration cap |
 | `dtype` | `'double'` | `'double'` or `'single'` |
+| `normalize_weights` | `False` | divide each variable's weight by that variable's variance (`Standard` only) |
+| `normalize_data` | `False` | standardize each point and variable within a block by its standard deviation |
 | `save_modes` | `True` | write `modes/triad_idx_{i:08d}.npy` |
 | `store_modes` | `False` | also keep all modes in memory, exposed as `.modes` |
 | `max_modes_gb` | `8.0` | refuse to write more than this without an explicit raise |
@@ -141,11 +143,12 @@ Results are written to `<savedir>/nfft{n_dft}_novlp{n_overlap}_nblks{n_blocks}/`
 `coeffs.npy` holds the maximisers of the numerical radius, one short vector per triad. Since the
 modes are just `Q @ a`, they can be rebuilt from these without re-running the optimizer — which
 is what makes it practical to run a large case with `save_modes=False` and decide afterwards
-which triads are worth reconstructing.
+which triads are worth reconstructing (the DFT rows of that triad have to be recomputed; there
+is no helper for this yet).
 
 ## Deviations from the reference implementation
 
-The algorithm is ported from O. T. Schmidt's MATLAB `bmd.m` and `cbmd.m`. Three deliberate
+The algorithm is ported from O. T. Schmidt's MATLAB `bmd.m` and `cbmd.m`. Four deliberate
 departures, each of which changes results:
 
 1. **`max_fov` uses the signed largest eigenvalue** of the Hermitian part, not the largest in
@@ -161,13 +164,19 @@ departures, each of which changes results:
 3. **The energy-transfer term `T` is computed**, and the solvers use a deterministic start
    vector rather than a global RNG, so results do not depend on how triads are distributed
    across MPI ranks.
+4. **The level-set filter uses `sqrt(eps)·max(w, 1)`** rather than the reference's
+   `sqrt(eps)·w`, which for the tiny levels of real BMD matrices rejects valid crossings. See
+   [`pybmd/bmd/CLAUDE.md`](pybmd/bmd/CLAUDE.md) for the measurements, and for a fifth, cosmetic
+   difference in how crossing angles are de-duplicated.
 
-`solver='simpleIteration'` reproduces the reference's only solver. It is not globally
-convergent — on random matrices it under-estimated the numerical radius in 14 of 40 cases, worst
-case 62 % low — so `MengiOverton` is the default.
+`solver='simpleIteration'` is Watson's simple iteration — the inner loop of the He–Watson
+algorithm the paper's appendix prescribes. (The reference accepts that option name but cannot
+actually run it; see `pybmd/bmd/CLAUDE.md`.) It is not globally convergent — on random matrices it
+under-estimated the numerical radius in 14 of 40 cases, worst case 62 % low — so `MengiOverton`
+is the default.
 
-`solver='MengiOvertonMATLAB'` reverts deviations 1 and 2 above (and the level-set filter's
-`sqrt(eps)*w` tolerance) to reproduce `bmd.m`'s own `MengiOverton` bug-for-bug, confirmed live
+`solver='MengiOvertonMATLAB'` reverts deviations 1, 2 and 4 above to reproduce `bmd.m`'s own
+`MengiOverton` bug-for-bug, confirmed live
 against the real MATLAB source under Octave to a few micro-relative on well-scaled problems. It
 exists **only** to reproduce a specific published MATLAB result — it reproduces a confirmed
 under-estimation bug and should never be used to analyse new data. See `docs/octave_cross_validation.md`
@@ -176,15 +185,16 @@ for the measured figures and `pybmd.bmd.optimizers.mengi_overton`'s docstring fo
 ## Testing
 
 ```bash
-pytest                       # everything
-pytest -m "not slow"         # fast subset, ~35 s
+pytest                            # everything, ~90 s (Octave cross-validation, one mpirun test)
+pytest -m "not slow and not mpi"  # fast subset, ~30 s
 ```
 
 The suite verifies the bispectrum against a **closed-form analytic result** — for an on-grid,
-boxcar-windowed, block-random-phase signal, `L(k1,k2) = (a1 a2 a3 / 8) Σ w conj(φ3) φ1 φ2`
-exactly — as well as conjugate symmetry, exact triad counts, CBMD reducing to BMD when the three
-variables coincide, bit-identical results across MPI rank counts, and a regression against an
-independent implementation on the cylinder-wake dataset.
+boxcar-windowed, block-random-phase signal, `L(k,l) = (a_k a_l a_{k+l} / 8) Σ w conj(φ_{k+l}) φ_k φ_l`
+for every triad — as well as conjugate symmetry, exact triad counts, CBMD reducing to BMD when the
+three variables coincide, bit-identical results between `mpirun -n 1` and `-n 2`, and a
+regression against the original MATLAB implementation run live under Octave on the cylinder-wake
+dataset (see [`tests/CLAUDE.md`](tests/CLAUDE.md)).
 
 ## References
 

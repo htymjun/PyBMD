@@ -20,7 +20,7 @@ from examples.data import load_cylinder_wake
 
 
 def main(save_dir='example1_out'):
-    x, y, u, v, dt = load_cylinder_wake("../tests/data/wake_Re500_sub.npz")
+    x, y, u, v, dt = load_cylinder_wake()
     nt, n1, n2 = u.shape
     print(f'cylinder wake: nt={nt}, grid={n1}x{n2}, dt={dt}')
 

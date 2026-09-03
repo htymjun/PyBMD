@@ -19,8 +19,10 @@ Everything after `B = Q_sum^H (Q_prod * w) / n_blocks` is shared in `Base._triad
 
 ## Data flow
 
-`fit()` → `_initialize` (dims, `n_blocks`, weights, mean, `Triads`, savedir, size guard) →
-`_compute_qhat` → `_triad_loop` → `_store_and_save`.
+`fit()` → `_initialize` (dims, `n_blocks`, weights, mean, `Triads`, savedir — clearing stale
+`modes/triad_idx_*.npy` from an earlier run into the same directory — size guard) →
+`_compute_qhat` → `_triad_loop` → `_store_and_save` (arrays first, `params_modes.yaml` last, so a
+YAML failure cannot lose results).
 
 `q_hat` is a **dict keyed by global frequency row**, holding only `triads.freq_needed` — the rows
 some triad actually references. With `max_freq_idx` set that is a small fraction of `n_dft`.
@@ -30,19 +32,34 @@ some triad actually references. With `max_freq_idx` set that is a small fraction
 - **C order everywhere. Never pass `order='F'`.** `L` and `T` are full reductions over space, so
   they are invariant to the flattening permutation; the *modes* are equivariant. Get flatten and
   unflatten out of step and `L` stays perfect while the modes come out scrambled — the failure the
-  original port shipped with. The one real hazard is the weights: `define_weights` therefore
-  **rejects a bare flat vector** and demands the full spatial shape.
+  original port shipped with, and then shipped *again* for CBMD: `Cross._triad_matrices` stacks
+  the states along the flat axis with the state **slowest** (`flat = j*nx + p`, matching
+  `cbmd.m`'s `repmat`), so a C-order reshape straight into `(*xshape, n_state)` scrambles every
+  `n_state > 1` mode. `_unflatten_modes` is the single place a flat mode becomes a field —
+  `Cross` overrides it to unflatten as `(n_state, *xshape)` and move the state axis last —
+  and `tests/test_cbmd.py::test_two_identical_states_give_identical_mode_slices` guards it.
+  The other hazards are the weights and a user `mean`: both are therefore checked against the
+  full `(*xshape, nv)` shape and a bare flat vector (or the reference's variable-first layout) is
+  **rejected**.
 - **The reduction accumulates into zeros, not NaN.** `NaN + SUM` poisons every rank. The reference's
   NaN-outside-the-triads semantics is restored *after* the `allreduce`, via `triads.mask`.
-- **Determinism is a requirement, not a nicety.** The MPI tests assert bit-identical `L`, `T`,
-  `coeffs` and modes across rank counts. `optimizers.py` contains no RNG at all — both solvers
+- **Determinism is a requirement, not a nicety.** `tests/test_bmd_mpi.py` asserts bit-identical
+  `L`, `T`, `coeffs` and modes between `mpirun -n 1` and `-n 2`. `optimizers.py` contains no RNG at all — both solvers
   start from `default_start`'s deterministic angular scan, or an explicit `solver_z0` — so this
   is structural, not a convention to maintain. Triads are split round-robin because solver cost
   varies in bands across the `f1`-`f2` plane.
 - **`T` carries no weight**, unlike `B`. That is deliberate and matches the reference — don't
   "fix" it.
 - **`coeffs.npy` is the durable artifact.** Modes are just `Q @ a`, so a large case can run with
-  `save_modes=False` and have any triad reconstructed later.
+  `save_modes=False` and have any triad reconstructed later — by recomputing the DFT rows of that
+  triad and applying `a`; there is no helper for this yet, and `BMDResults` does not load
+  `coeffs.npy`.
+- **`normalize_weights` is variable-wise and therefore `Standard`-only**: CBMD weights have no
+  variable axis, so `Cross` rejects it at construction (the reference has no such option).
+  `apply_normalization` returns a *copy* — the caller's weights dict must survive a `fit()`.
+  `normalize_data` standardizes each point and variable within a block by its standard deviation.
+- **`store_modes` costs as much as `save_modes`, on every rank** (the full `(n_triads, 2,
+  *mode_shape)` array plus its `allreduce` buffer); the `max_modes_gb` guard covers both.
 
 ## Deviations from the MATLAB reference — do not revert these
 
@@ -71,6 +88,13 @@ This is why the two must be applied together, not as alternatives.
    `sqrt(eps) * w` — undocumented until now. It only matters for `w < 1`, i.e. every real BMD
    case, and without it the `max(w,1.0)` clamp would make deviation 2 alone insufficient (see the
    `only pow2-prescale fix` row not being enough on its own for the last cylinder-wake triad).
+5. `mengi_overton` rounds the crossing angles to 10 decimals before `np.unique`, so near-duplicate
+   crossings from the pencil collapse into one; the reference's plain `unique` keeps them, which
+   only costs redundant midpoint tests. Cosmetic — it changes no value.
+
+`simple_iteration` also iterates on the `_pow2_scale`d matrix (returning the Rayleigh quotient on
+the original), otherwise its absolute `|w − w_old| ≤ tol` stopping test fires after one update on
+the tiny matrices BMD produces.
 
 Confirmed live under Octave, for both `bmd.m` and `cbmd.m` (see
 [`docs/octave_cross_validation.md`](../../docs/octave_cross_validation.md)): the reference's actually
@@ -103,7 +127,7 @@ bispectrum, not a meaningful reference value to chase.
 
 `MengiOvertonMATLAB` (`solver='MengiOvertonMATLAB'`, equivalently
 `mengi_overton(..., matlab_compat=True)`) *is* ported, as an explicit opt-in that reverts
-deviations 1/2/4 (not 3 — it stays RNG-free, so the determinism requirement above is unaffected)
+deviations 1/2/4/5 (not 3 — it stays RNG-free, so the determinism requirement above is unaffected)
 and reproduces `refs/bmd/bmd.m`'s own `MengiOverton` instead. It exists only to reproduce a
 specific published MATLAB result, never to analyse new data with, since it reproduces a confirmed
 under-estimation bug. Measured live under Octave on the same 169-triad cylinder-wake fixture cited

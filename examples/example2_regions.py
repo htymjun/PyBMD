@@ -23,7 +23,7 @@ from examples.data import load_cylinder_wake
 
 
 def main(save_dir='example2_out', k=5, l=-2):
-    x, y, u, v, dt = load_cylinder_wake("../tests/data/wake_Re500_sub.npz")
+    x, y, u, v, dt = load_cylinder_wake()
     nt, n1, n2 = u.shape
 
     ## two variables, stacked on the last axis

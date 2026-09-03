@@ -143,8 +143,10 @@ def test_solver_reachability_matches_claude_md(small_data):
 
 
 def test_default_window_matches_reference():
-    '''``pybmd.bmd.utils.hamming_window`` against ``bmd.m``'s own ``hammwin``,
-    evaluated live under Octave rather than compared by reading the source.'''
+    '''``pybmd.bmd.utils.hamming_window`` against the formula of ``bmd.m``'s
+    ``hammwin`` evaluated under Octave. ``hammwin`` is a file-local subfunction
+    that cannot be called from outside ``bmd.m``, so this is Octave arithmetic
+    on the transcribed expression (``bmd.m:310``), not a call into the file.'''
     oref.require_octave()
     ref = oref.octave_hamming_window(64)
     py = utils_bmd.hamming_window(64)

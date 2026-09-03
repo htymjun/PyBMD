@@ -1,5 +1,6 @@
 '''Module implementing I/O utils used across the library.'''
 import argparse
+import os
 from os.path import splitext
 
 import numpy as np
@@ -17,14 +18,15 @@ def read_data(data_file, format=None, comm=None):
     :param str format: format to read. Default is inferred from the extension.
     :param MPI.Comm comm: parallel communicator. Default is None.
 
-    :return: the data.
-    :rtype: numpy.ndarray or dict
+    :return: the data: an array for ``.npy``, a dict of arrays for ``.npz``
+        and ``.mat``, an ``xarray.Dataset`` for ``.nc``.
+    :rtype: numpy.ndarray or dict or xarray.Dataset
     '''
     if not format:
         _, format = splitext(data_file)
+    format = format.lower().lstrip('.')
     if comm is not None and comm.rank == 0:
         print(f'reading data with format: {format}')
-    format = format.lower().lstrip('.')
     if format == 'npy':
         return np.load(data_file)
     if format == 'npz':
@@ -34,8 +36,25 @@ def read_data(data_file, format=None, comm=None):
         return _read_mat(data_file)
     if format == 'nc':
         import xarray as xr
-        return xr.open_dataset(data_file)
+        with xr.open_dataset(data_file) as ds:
+            return ds.load()
     raise ValueError(f'{format} format not supported')
+
+
+def _from_matlab_hdf5(arr):
+    '''
+    Undo the two transformations MATLAB applies when writing a v7.3 array.
+
+    MATLAB stores arrays column-major, so h5py reports the dimensions
+    reversed: a MATLAB ``[nt, nx, nv]`` variable reads back as ``(nv, nx,
+    nt)`` and must be transposed to match what ``scipy.io.loadmat`` returns
+    for the same variable in a v5 file. Complex arrays arrive as a compound
+    ``(real, imag)`` dtype.
+    '''
+    arr = np.asarray(arr)
+    if arr.dtype.names and {'real', 'imag'} <= set(arr.dtype.names):
+        arr = arr['real'] + 1j * arr['imag']
+    return arr.T
 
 
 def _read_mat(data_file):
@@ -43,12 +62,42 @@ def _read_mat(data_file):
     try:
         import h5py
         with h5py.File(data_file, 'r') as f:
-            return {k: np.array(v) for k, v in f.items()}
+            # '#refs#' holds cell/struct storage, not user variables
+            return {k: _from_matlab_hdf5(v[()]) for k, v in f.items()
+                    if isinstance(v, h5py.Dataset) and not k.startswith('#')}
     except (ImportError, OSError):
         # OSError: not an HDF5 file, i.e. a pre-v7.3 .mat
         import scipy.io
         d = scipy.io.loadmat(data_file)
         return {k: v for k, v in d.items() if not k.startswith('__')}
+
+
+def _as_array(obj):
+    '''
+    Coerce what :func:`read_data` returns into a single array: an array is
+    passed through, a dict (``.npz``/``.mat``) or ``xarray.Dataset`` must hold
+    exactly one array variable, an ``xarray.DataArray`` gives its values.
+    '''
+    if isinstance(obj, np.ndarray):
+        return obj
+    if isinstance(obj, dict):
+        arrays = {k: v for k, v in obj.items()
+                  if isinstance(v, np.ndarray) and v.ndim >= 2}
+        if len(arrays) == 1:
+            return next(iter(arrays.values()))
+        raise ValueError(
+            f'the file holds {len(arrays)} array variables '
+            f'{sorted(arrays)}; load it and pass the data array directly.')
+    if hasattr(obj, 'data_vars'):   # xarray.Dataset
+        names = list(obj.data_vars)
+        if len(names) != 1:
+            raise ValueError(
+                f'the dataset holds {len(names)} variables {names}; select '
+                f'one and pass its array directly.')
+        obj = obj[names[0]]
+    if hasattr(obj, 'dims') and hasattr(obj, 'values'):   # xarray.DataArray
+        return np.asarray(obj.values)
+    return np.asarray(obj)
 
 
 def read_config(parsed_file=None):
@@ -63,7 +112,8 @@ def read_config(parsed_file=None):
     :rtype: dict
     '''
     parser = argparse.ArgumentParser(description='Config file.')
-    parser.add_argument('--config_file', help='Configuration file.')
+    parser.add_argument('--config_file', required=True,
+                        help='Configuration file.')
     if parsed_file:
         args = parser.parse_args(['--config_file', parsed_file])
     else:
@@ -99,14 +149,15 @@ def get_data_array(data_list, xdim, nv, dtype=np.float64):
     '''
     if isinstance(data_list, np.ndarray):
         data = data_list
-    elif isinstance(data_list, str):
-        data = read_data(data_list)
+    elif isinstance(data_list, (str, os.PathLike)):
+        data = _as_array(read_data(os.fspath(data_list)))
     elif isinstance(data_list, (list, tuple)):
-        parts = [d if isinstance(d, np.ndarray) else read_data(d)
+        parts = [_as_array(read_data(os.fspath(d))
+                           if isinstance(d, (str, os.PathLike)) else d)
                  for d in data_list]
         data = parts[0] if len(parts) == 1 else np.concatenate(parts, axis=0)
     else:
-        data = np.asarray(data_list)
+        data = _as_array(data_list)
 
     if not isinstance(data, np.ndarray):
         raise TypeError(

@@ -14,7 +14,8 @@ import yaml
 
 from pybmd.bmd.utils import Triads
 from pybmd.utils.postproc import get_bispectrum, get_modes_at_triad
-from pybmd.utils.postproc import _save_show_plots, _symmetric_levels
+from pybmd.utils.postproc import (_save_figure, _save_show_plots,
+                                  _symmetric_levels)
 
 
 __all__ = [
@@ -33,7 +34,7 @@ __all__ = [
 ]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class BMDResults:
     '''
     Results loaded from a BMD/CBMD results directory.
@@ -41,6 +42,9 @@ class BMDResults:
     ``path`` is the simulation directory containing ``bispectrum.npz`` and
     ``triads.npz``. For a standard run this is the nested directory named like
     ``nfft64_novlp32_nblks10``.
+
+    ``eq=False``: the fields are arrays, so the generated ``__eq__`` and
+    ``__hash__`` would raise; instances compare by identity.
     '''
     path: str
     L: np.ndarray
@@ -182,7 +186,9 @@ def top_triads(results, n=10, quantity='L', exclude_zero=True):
     if idx.size == 0:
         return np.empty(0, dtype=_top_triad_dtype())
 
-    order = idx[np.argsort(values[idx])[::-1][:int(n)]]
+    # stable sort, so ties keep their triad order and the ranking is
+    # reproducible across numpy builds
+    order = idx[np.argsort(-values[idx], kind='stable')[:int(n)]]
     out = np.empty(order.size, dtype=_top_triad_dtype())
     out['triad_idx'] = order
     out['k'] = t.k[order]
@@ -227,7 +233,7 @@ def plot_mode_bispectrum(L, freq, log=True, levels=None, xlim=None, ylim=None,
                          cmap='viridis', mark=None, figsize=(6, 6), title='',
                          xlabel=r'$f_1$', ylabel=r'$f_2$', path=None,
                          filename=None, ax=None, extend='both',
-                         extendrect=True):
+                         extendrect=True, signed=False, cbar_label=None):
     '''
     Contour the mode bispectrum over the ``f1``-``f2`` plane.
 
@@ -236,14 +242,20 @@ def plot_mode_bispectrum(L, freq, log=True, levels=None, xlim=None, ylim=None,
         masked out.
     :param numpy.ndarray freq: the frequency axis.
     :param bool log: plot ``log|L|`` rather than ``|L|``. Default is True.
-    :param levels: contour levels, or the number of them. Default is 100.
+    :param levels: contour levels, or the number of them. Default is 100, or
+        levels symmetric about zero when ``signed``.
     :param mark: triads to annotate, as a list of ``(f1, f2)`` pairs.
     :param str extend: contour extension mode. Default is ``'both'`` so values
         outside explicit contour levels are still colored.
     :param bool extendrect: draw colorbar extensions as rectangles rather than
         triangles. Default is True.
     :param matplotlib.axes.Axes ax: axes to draw on. A new figure is created
-        if omitted.
+        if omitted. ``filename`` is honoured either way; the figure is only
+        closed when this call created it.
+    :param bool signed: plot the real part of ``L`` with its sign, rather
+        than ``|L|``. Used for the energy transfer, which is a signed
+        quantity. Incompatible with ``log``. Default is False.
+    :param str cbar_label: colorbar label. Default names ``|lambda_1|``.
 
     :return: the axes drawn on.
     :rtype: matplotlib.axes.Axes
@@ -251,18 +263,30 @@ def plot_mode_bispectrum(L, freq, log=True, levels=None, xlim=None, ylim=None,
     import matplotlib.pyplot as plt
 
     f1, f2 = np.meshgrid(freq, freq, indexing='ij')
-    field = np.abs(L)
-    if log:
-        with np.errstate(divide='ignore', invalid='ignore'):
-            field = np.log(field)
+    if signed:
+        if log:
+            raise ValueError('log=True cannot be combined with signed=True.')
+        field = np.real(L)
+    else:
+        field = np.abs(L)
+        if log:
+            with np.errstate(divide='ignore', invalid='ignore'):
+                field = np.log(field)
     field = np.ma.masked_invalid(field)
+    if levels is None:
+        if signed:
+            finite = field.compressed()
+            levels = _symmetric_levels(finite if finite.size else np.zeros(1),
+                                       n_levels=101, scale=1.0)
+        else:
+            levels = 100
+    if cbar_label is None:
+        cbar_label = r'$\log|\lambda_1|$' if log else r'$|\lambda_1|$'
 
     created = ax is None
     if created:
         _, ax = plt.subplots(figsize=figsize)
-    im = ax.contourf(f1, f2, field,
-                     levels=levels if levels is not None else 100,
-                     cmap=cmap, extend=extend)
+    im = ax.contourf(f1, f2, field, levels=levels, cmap=cmap, extend=extend)
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
     ax.set_title(title or 'Mode bispectrum')
@@ -275,19 +299,22 @@ def plot_mode_bispectrum(L, freq, log=True, levels=None, xlim=None, ylim=None,
         xlim = (f1[valid].min(), f1[valid].max())
     if ylim is None and valid.any():
         ylim = (f2[valid].min(), f2[valid].max())
-    if xlim:
+    if xlim is not None:
         ax.set_xlim(xlim)
-    if ylim:
+    if ylim is not None:
         ax.set_ylim(ylim)
 
     if mark:
         for m_f1, m_f2 in mark:
             ax.plot(m_f1, m_f2, 'o', ms=8, mfc='none', mec='r', mew=1.5)
 
-    ax.figure.colorbar(im, ax=ax, extendrect=extendrect,
-                       label=r'$\log|\lambda_1|$' if log else r'$|\lambda_1|$')
-    if created:
-        _save_show_plots(filename, path, plt)
+    ax.figure.colorbar(im, ax=ax, extendrect=extendrect, label=cbar_label)
+    if filename:
+        _save_figure(ax.figure, filename, path)
+        if created:
+            plt.close(ax.figure)
+    elif created:
+        plt.show()
     return ax
 
 
@@ -295,14 +322,21 @@ def plot_energy_transfer(T, freq, **kwargs):
     '''
     Contour the energy-transfer term over the ``f1``-``f2`` plane.
 
+    ``T`` is a *signed* real quantity -- its sign is the direction of the
+    transfer -- so it is drawn as is, on a diverging colormap with levels
+    symmetric about zero, rather than as a magnitude.
+
     :param numpy.ndarray T: the energy transfer, of shape ``(n_freq, n_freq)``.
     :param numpy.ndarray freq: the frequency axis.
 
     See :func:`plot_mode_bispectrum` for the remaining arguments.
     '''
     kwargs.setdefault('log', False)
+    kwargs.setdefault('signed', True)
+    kwargs.setdefault('cmap', 'RdBu_r')
+    kwargs.setdefault('cbar_label', r'$T$')
     kwargs.setdefault('title', 'Energy transfer')
-    return plot_mode_bispectrum(T.astype(complex), freq, **kwargs)
+    return plot_mode_bispectrum(np.asarray(T), freq, **kwargs)
 
 
 def plot_triad_modes(modes, k, l, x1=None, x2=None, vars_idx=(0,),

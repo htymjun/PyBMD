@@ -14,8 +14,9 @@ pip install -e '.[mpi,io,test]'      # editable install; extras: mpi, io (.mat/.
 git submodule update --init          # populate refs/bmd (the MATLAB reference), only needed
                                      # for tests/test_octave_reference.py -- see tests/CLAUDE.md
 
-pytest                                # full suite, ~60 s, 223 tests
-pytest -m "not slow"                  # fast subset, ~45 s
+pytest                                # full suite, ~90 s, 169 tests: 13 `slow` (Octave
+                                      # cross-validation, figure regeneration), 1 `mpi`
+pytest -m "not slow and not mpi"      # fast subset, ~30 s
 pytest tests/optimizers -q            # one directory (numerical-radius solver tests,
                                       # one test function per file)
 pytest tests/test_bmd_serial.py::test_bispectrum_matches_closed_form -q   # one test
@@ -26,11 +27,18 @@ python -m pyflakes pybmd/ tests/ examples/   # only linter used; ignore the
                                              # hits, they match the PySPOD print idiom
 ```
 
-Set `OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1` when running the MPI tests — they assert
-**bit-identical** results across rank counts, and threaded BLAS reorders reductions.
+`tests/conftest.py` puts this checkout first on `sys.path`, so the suite tests the source tree
+even if a non-editable `pybmd` is installed in site-packages; still prefer the editable install
+above so that scripts and the examples see the same code.
 
-Examples are run from the `examples/` directory (they load the fixture by relative path):
-`cd examples && MPLBACKEND=Agg python example1_cylinder.py`.
+The MPI test (`tests/test_bmd_mpi.py`, marker `mpi`) launches `mpirun -n 1` and `-n 2` itself and
+asserts **bit-identical** `L`, `T`, `coeffs` and modes between them; it self-skips without `mpirun`
+or `mpi4py`. It sets `OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1` for its subprocesses — threaded
+BLAS reorders reductions — so set the same when comparing MPI runs by hand.
+
+Examples run from any directory (the fixture path is resolved relative to `examples/data.py`):
+`MPLBACKEND=Agg python examples/example1_cylinder.py`; they write `example*_out/` in the working
+directory.
 
 ## Architecture
 

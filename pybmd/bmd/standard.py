@@ -21,7 +21,7 @@ class Standard(Base):
         Nonlinear Dynamics, 2020. DOI 10.1007/s11071-020-06037-z
     '''
 
-    def fit(self, data_list, variables=None):
+    def fit(self, data_list):
         '''
         Class-specific method to fit the data matrix using the BMD algorithm.
 
@@ -34,7 +34,7 @@ class Standard(Base):
         start0 = time.time()
 
         start = time.time()
-        self._initialize(data_list, variables)
+        self._initialize(data_list)
         self._mode_shape = (*self._xshape, self._nv)
         self._pr0(f'Time to initialize: {time.time() - start} s.')
 

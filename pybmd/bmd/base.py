@@ -4,6 +4,7 @@ Base module for the BMD:
 '''
 from __future__ import division
 
+import glob
 import os
 import time
 import warnings
@@ -17,8 +18,29 @@ import pybmd.utils.io as utils_io
 import pybmd.utils.parallel as utils_par
 import pybmd.utils.weights as utils_weights
 
-CWD = os.getcwd()
 B2GB = 9.3132257461548e-10
+
+
+def _yaml_safe(obj):
+    '''
+    Convert numpy scalars and arrays, recursively through containers, into
+    plain Python values that ``yaml.dump`` can represent.
+
+    Users routinely leave numpy values in ``params`` (``regions=np.array([1,
+    2])``, a float32 time step); the dump must not fail on them after the
+    whole decomposition has run.
+    '''
+    if isinstance(obj, dict):
+        return {str(k): _yaml_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_yaml_safe(v) for v in obj]
+    if isinstance(obj, np.ndarray):
+        return _yaml_safe(obj.tolist())
+    if isinstance(obj, np.generic):
+        obj = obj.item()
+    if isinstance(obj, complex):
+        return str(obj)
+    return obj
 
 
 class Base():
@@ -70,14 +92,17 @@ class Base():
         self._dtype = params.get('dtype', 'double')
         self._normalize_weights = params.get('normalize_weights', False)
         self._normalize_data = params.get('normalize_data', False)
-        self._savedir = os.path.join(CWD, params.get('savedir', 'bmd_results'))
-        params['savedir'] = self._savedir
+        # resolve against the working directory at construction, not at import
+        self._savedir = os.path.abspath(params.get('savedir', 'bmd_results'))
         self._save_modes = params.get('save_modes', True)
         self._store_modes = params.get('store_modes', False)
         self._max_modes_gb = params.get('max_modes_gb', 8.0)
         self._compute_transfer = params.get('compute_energy_transfer', True)
 
-        self._params = params
+        # a copy: the run records derived quantities (n_blocks, the results
+        # folder, ...) into it, and that must not leak into the caller's dict
+        self._params = dict(params)
+        self._params['savedir'] = self._savedir
         self._weights_tmp = weights
         self._mean_user = mean
         self._comm = comm
@@ -99,6 +124,14 @@ class Base():
         if self._mean_type.lower() not in ('longtime', 'blockwise', 'zero',
                                            'none'):
             raise ValueError(f'{self._mean_type} not recognized.')
+        if self._solver_z0 is not None and self._solver != 'simpleIteration':
+            raise ValueError(
+                f'solver_z0 is only used by the simpleIteration solver; the '
+                f'{self._solver} solver is deterministic and takes no start '
+                f'vector.')
+        if self._n_dft < 4:
+            raise ValueError(
+                f'n_dft must be at least 4; got {self._n_dft}.')
 
         ## window and overlap
         self._window, self._window_name = utils_bmd.get_window(
@@ -128,6 +161,26 @@ class Base():
             realizations at ``f1 + f2`` and ``q_prod`` the quadratic term.
         '''
         raise NotImplementedError  # pragma: no cover
+
+    def _expected_weights_shape(self):
+        '''Shape a user weight array must have: spatial shape plus variables.'''
+        return tuple(self._xshape) + (self._nv,)
+
+    def _mode_elements(self):
+        '''Number of entries of one mode, i.e. the length of the flat axis
+        that :meth:`_triad_matrices` builds.'''
+        return self._nxv
+
+    def _unflatten_modes(self, psi):
+        '''
+        Reshape the two flat modes ``(2, n)`` of a triad to ``(2, *mode_shape)``.
+
+        The flat axis is the one :meth:`_triad_matrices` builds. Here it is
+        the C-order flattening of ``(*xshape, nv)``, so a plain reshape undoes
+        it; a subclass that stacks that axis in a different order must override
+        this, or its modes come out scrambled while ``L`` stays correct.
+        '''
+        return psi.reshape((2, *self._mode_shape))
 
     # --------------------------------------------------------------------------
     # basic getters
@@ -299,7 +352,7 @@ class Base():
         if self._n_overlap > self._n_dft - 1:
             raise ValueError('Overlap is too large.')
 
-    def _initialize(self, data_list, variables=None):
+    def _initialize(self, data_list):
         '''Set up dimensions, weights, mean, frequency axis and triads.'''
         self._pr0(f' ')
         self._pr0(f'Initialize data')
@@ -374,20 +427,31 @@ class Base():
         self._modes_dir = os.path.join(self._savedir_sim, 'modes')
         if self._rank == 0:
             os.makedirs(self._modes_dir, exist_ok=True)
+            # the directory name encodes only the blocking, so a previous run
+            # with more triads may have left mode files here that this run
+            # will not overwrite; every other file is rewritten, so these
+            # would be the only stale state a loader could pick up
+            for stale in glob.glob(os.path.join(self._modes_dir,
+                                                'triad_idx_*.npy')):
+                os.remove(stale)
         utils_par.barrier(self._comm)
 
         # problem size accounting; check the mode footprint before the DFT, so
         # an unaffordable configuration fails in seconds rather than in hours
         self._pb_size_f = self.data.size * self._float(1).nbytes * B2GB
         self._qhat_size_gb = (self._triads.freq_needed.size * self._nxv
+                              * self._n_blocks
                               * self._complex(1).nbytes * B2GB)
-        self._modes_size_gb = (2 * self.n_triads * self._nxv
+        self._modes_size_gb = (2 * self.n_triads * self._mode_elements()
                                * self._complex(1).nbytes * B2GB)
-        if self._save_modes and self._modes_size_gb > self._max_modes_gb:
+        if ((self._save_modes or self._store_modes)
+                and self._modes_size_gb > self._max_modes_gb):
             raise ValueError(
-                f'Saving all modes would need {self._modes_size_gb:.2f} GB, '
-                f'above the max_modes_gb limit of {self._max_modes_gb:.2f} GB. '
-                f'Set params["save_modes"] = False to store only the '
+                f'Keeping all modes would need {self._modes_size_gb:.2f} GB '
+                f'(on disk with save_modes, and on every rank with '
+                f'store_modes), above the max_modes_gb limit of '
+                f'{self._max_modes_gb:.2f} GB. Set params["save_modes"] and '
+                f'params["store_modes"] to False to store only the '
                 f'coefficients, or raise params["max_modes_gb"].')
 
         self._print_parameters()
@@ -396,7 +460,7 @@ class Base():
     def define_weights(self):
         '''Define and check weights.'''
         self._pr0('- checking weight dimensions')
-        expected = tuple(self._xshape) + (self._nv,)
+        expected = self._expected_weights_shape()
         if isinstance(self._weights_tmp, dict):
             self._weights = np.asarray(self._weights_tmp['weights'])
             self._weights_name = self._weights_tmp['weights_name']
@@ -431,8 +495,23 @@ class Base():
         mean_type = self._mean_type.lower()
         self._lt_mean = self.long_t_mean(data)
         if self._mean_user is not None:
-            self._t_mean = np.reshape(
-                np.asarray(self._mean_user), [-1])
+            mean_user = np.asarray(self._mean_user)
+            expected = tuple(self._xshape) + (self._nv,)
+            if mean_user.shape != expected:
+                # same reasoning as for the weights: a flat vector, or the
+                # reference's variable-first layout, has the right number of
+                # elements and would silently attach the wrong mean to every
+                # point
+                raise ValueError(
+                    f'mean has shape {mean_user.shape} but {expected} is '
+                    f'required: the full spatial shape with the variable axis '
+                    f'last, in the same layout as the data.')
+            if mean_type == 'blockwise' and self._rank == 0:
+                warnings.warn(
+                    'A user mean was passed together with '
+                    'mean_type="blockwise"; the user mean is subtracted and '
+                    'no blockwise mean is removed.')
+            self._t_mean = self._set_dtype(np.reshape(mean_user, [-1]))
             self._mean_type = 'user'
         elif mean_type == 'longtime':
             self._t_mean = self._lt_mean
@@ -470,10 +549,12 @@ class Base():
             q_blk = q_blk - np.mean(q_blk, axis=0)
 
         if self._normalize_data:
+            # standardize every point and variable to unit variance within the
+            # block, i.e. divide by the standard deviation
             den = self._n_dft - 1
             q_var = np.sum((q_blk - np.mean(q_blk, axis=0))**2, axis=0) / den
-            q_var[q_var < 4 * np.finfo(float).eps] = 1
-            q_blk = q_blk / q_var
+            q_var[q_var < 4 * np.finfo(q_blk.dtype).eps] = 1
+            q_blk = q_blk / np.sqrt(q_var)
 
         q_blk = q_blk * self._window
         q_blk = self._set_dtype(q_blk)
@@ -543,13 +624,13 @@ class Base():
             # quadratic term; (n_blocks, n_blocks)
             B = q_sum.conj().T @ (q_prod * weights) / self._n_blocks
 
-            r, a = optimizers.solve(
-                B, solver=self._solver, tol=self._solver_tol,
-                n_it_max=self._solver_n_it_max, z0=self._solver_z0)
-
             # the optimizer works in double precision regardless of the
             # requested dtype -- B is only (n_blocks, n_blocks), so the accuracy
             # is free -- but the results are stored at the requested precision
+            B = B.astype(np.complex128, copy=False)
+            r, a = optimizers.solve(
+                B, solver=self._solver, tol=self._solver_tol,
+                n_it_max=self._solver_n_it_max, z0=self._solver_z0)
             a = a.astype(self._complex)
             psi_sum = q_sum @ a
             psi_prod = q_prod @ a
@@ -561,12 +642,14 @@ class Base():
                     np.real(np.vdot(psi_sum, psi_prod)) / self._n_blocks
             coeffs[i, :] = a
 
-            psi = np.stack([utils_bmd.normalize_mode(psi_sum, weights),
-                            utils_bmd.normalize_mode(psi_prod, weights)])
-            if self._store_modes:
-                self._modes[i] = psi.reshape((2, *self._mode_shape))
-            if self._save_modes:
-                self._save_modes_at_triad(i, psi)
+            if self._store_modes or self._save_modes:
+                psi = self._unflatten_modes(np.stack(
+                    [utils_bmd.normalize_mode(psi_sum, weights),
+                     utils_bmd.normalize_mode(psi_prod, weights)]))
+                if self._store_modes:
+                    self._modes[i] = psi
+                if self._save_modes:
+                    self._save_modes_at_triad(i, psi)
 
             if n % 100 == 0 or n == my_triads.size - 1:
                 self._pr0(
@@ -592,9 +675,10 @@ class Base():
         utils_par.barrier(self._comm)
 
     def _save_modes_at_triad(self, i_triad, psi):
-        '''Write the two modes of one triad to ``modes/triad_idx_{i:08d}.npy``.'''
+        '''Write the two modes ``(2, *mode_shape)`` of one triad to
+        ``modes/triad_idx_{i:08d}.npy``.'''
         path = os.path.join(self._modes_dir, f'triad_idx_{i_triad:08d}.npy')
-        np.save(path, psi.reshape((2, *self._mode_shape)))
+        np.save(path, psi)
 
     def get_modes_at_triad(self, triad_idx):
         '''
@@ -603,8 +687,9 @@ class Base():
         :param int triad_idx: index into the per-triad arrays, as returned by
             ``self.triads.find(k, l)``.
 
-        :return: the modes, of shape ``(2, *xshape, nv)``. Index 0 is the
-            sum-interaction mode and index 1 the quadratic-term mode.
+        :return: the modes, of shape ``(2, *xshape, nv)`` (``n_state`` in
+            place of ``nv`` for :class:`~pybmd.bmd.cross.Cross`). Index 0 is
+            the sum-interaction mode and index 1 the quadratic-term mode.
         :rtype: numpy.ndarray
         '''
         if self._store_modes:
@@ -645,17 +730,19 @@ class Base():
         self._params['solver'] = str(self._solver)
 
         if self._rank == 0:
-            path_params = os.path.join(self._savedir_sim, 'params_modes.yaml')
-            with open(path_params, 'w') as f:
-                yaml.dump(self._params, f)
+            # arrays first: the YAML dump is the one step that can fail on an
+            # unexpected value type, and it must not take the results with it
+            np.savez(os.path.join(self._savedir_sim, 'bispectrum.npz'),
+                     L=self._L, T=self._T, freq=self.freq, f_idx=self.f_idx)
+            self._triads.to_npz(os.path.join(self._savedir_sim, 'triads.npz'))
+            np.save(os.path.join(self._savedir_sim, 'coeffs.npy'), self._coeffs)
             np.save(os.path.join(self._savedir_sim, 'weights.npy'),
                     self._weights)
             np.save(os.path.join(self._savedir_sim, 'ltm_modes.npy'),
                     self._lt_mean)
-            np.save(os.path.join(self._savedir_sim, 'coeffs.npy'), self._coeffs)
-            self._triads.to_npz(os.path.join(self._savedir_sim, 'triads.npz'))
-            np.savez(os.path.join(self._savedir_sim, 'bispectrum.npz'),
-                     L=self._L, T=self._T, freq=self.freq, f_idx=self.f_idx)
+            path_params = os.path.join(self._savedir_sim, 'params_modes.yaml')
+            with open(path_params, 'w') as f:
+                yaml.dump(_yaml_safe(self._params), f)
             print(f'Parameters dictionary saved in: {path_params}')
             print(f'Bispectrum saved in: '
                   f'{os.path.join(self._savedir_sim, "bispectrum.npz")}')

@@ -403,10 +403,14 @@ def brute_force_radius(A, n_theta=40001, refine=True):
 
 def octave_hamming_window(n):
     '''
-    ``bmd.m``'s own internal ``hammwin(N)`` (its default window, used when no
-    window is passed), evaluated live under Octave -- not just read off the
-    source -- so it can be compared against
+    The formula of ``bmd.m``'s internal ``hammwin(N)`` (its default window),
+    evaluated under Octave so it can be compared against
     :func:`pybmd.bmd.utils.hamming_window`.
+
+    ``hammwin`` is a file-local subfunction of ``bmd.m`` and cannot be called
+    from outside that file, so the expression below is transcribed from
+    ``refs/bmd/bmd.m:310`` rather than invoked in place: this checks NumPy
+    against Octave arithmetic on that expression, not the file itself.
     '''
     exe = require_octave()
     scratch = _scratch_dir()

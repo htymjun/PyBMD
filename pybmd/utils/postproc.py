@@ -87,14 +87,19 @@ def get_bispectrum(results_path):
         return d['L'], d['T'], d['freq'], d['f_idx']
 
 
+def _save_figure(fig, filename, path=None):
+    '''Save ``fig`` as ``path/filename``, creating ``path`` (default: the
+    working directory) if needed.'''
+    if path is None:
+        path = os.getcwd()
+    os.makedirs(path, exist_ok=True)
+    fig.savefig(os.path.join(path, filename), dpi=200, bbox_inches='tight')
+
+
 def _save_show_plots(filename, path, plt):
     '''Save the current figure if a filename is given, otherwise show it.'''
     if filename:
-        if path is None:
-            path = os.getcwd()
-        os.makedirs(path, exist_ok=True)
-        plt.savefig(os.path.join(path, filename), dpi=200,
-                    bbox_inches='tight')
+        _save_figure(plt.gcf(), filename, path)
         plt.close()
     else:
         plt.show()

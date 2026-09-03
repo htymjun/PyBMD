@@ -44,6 +44,12 @@ class Cross(Base):
         self._qr_idx = np.atleast_2d(
             np.asarray(params.get('qr_idx', [[1, 2]]), dtype=int))
         self._validate_var_idx()
+        if self._normalize_weights:
+            raise ValueError(
+                'normalize_weights is not supported by Cross: CBMD weights are '
+                'purely spatial and have no variable axis to normalize '
+                'variable-wise (the reference cbmd.m has no such option '
+                'either). Use normalize_data, or pass pre-scaled weights.')
 
     @property
     def n_state(self):
@@ -75,24 +81,29 @@ class Cross(Base):
                     f'{np.unique(bad).tolist()}; these are 0-based and must '
                     f'lie in 0..{self._nv - 1}.')
 
-    def define_weights(self):
+    def _expected_weights_shape(self):
         '''
-        Define and check weights.
-
         CBMD weights are purely spatial, with no variable axis: the same weight
         applies to every state, and is tiled internally.
         '''
-        self._pr0('- checking weight dimensions')
-        expected = tuple(self._xshape)
-        if isinstance(self._weights_tmp, dict):
-            self._weights = np.asarray(self._weights_tmp['weights'])
-            self._weights_name = self._weights_tmp['weights_name']
-            self._check_weights_shape(expected)
-        else:
-            self._weights = np.ones(expected)
-            self._weights_name = 'uniform'
+        return tuple(self._xshape)
 
-    def fit(self, data_list, variables=None):
+    def _mode_elements(self):
+        return self.n_state * self._nx
+
+    def _unflatten_modes(self, psi):
+        '''
+        :meth:`_triad_matrices` stacks the states along the flat axis with the
+        state as the *slowest* index (``flat = j*nx + p``), matching the
+        reference's ``repmat``. A C-order reshape straight into
+        ``(*xshape, n_state)`` would read the state as the fastest index and
+        scramble the modes, so unflatten as ``(n_state, *xshape)`` first and
+        move the state axis last.
+        '''
+        psi = psi.reshape((2, self.n_state, *self._xshape))
+        return np.moveaxis(psi, 1, -1)
+
+    def fit(self, data_list):
         '''
         Class-specific method to fit the data matrix using the CBMD algorithm.
 
@@ -105,7 +116,7 @@ class Cross(Base):
         start0 = time.time()
 
         start = time.time()
-        self._initialize(data_list, variables)
+        self._initialize(data_list)
         self._mode_shape = (*self._xshape, self.n_state)
         # the same spatial weight applies to every state; tile the whole
         # spatial vector n_state times (a per-element repeat would scramble it)

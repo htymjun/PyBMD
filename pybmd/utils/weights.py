@@ -95,24 +95,37 @@ def apply_normalization(data, weights, n_vars, method='variance', comm=None):
     '''
     Normalize the weights variable-wise by the data variance.
 
-    :param numpy.ndarray data: the data.
-    :param numpy.ndarray weights: the weights.
+    :param numpy.ndarray data: the data, ``(nt, *xshape, n_vars)``.
+    :param numpy.ndarray weights: the weights, ``(*xshape, n_vars)``. Left
+        untouched; a normalized copy is returned.
     :param int n_vars: number of variables.
     :param str method: normalization method. Default is 'variance'.
-    :param MPI.Comm comm: parallel communicator. Default is None.
+    :param MPI.Comm comm: parallel communicator. Default is None. Accepted for
+        interface symmetry only: every rank holds the same replicated data, so
+        no reduction is needed.
 
-    :return: the normalized weights.
+    :return: the normalized weights, a new array.
     :rtype: numpy.ndarray
     '''
     if method.lower() != 'variance':
         return weights
-    axis = tuple(np.arange(0, data[..., 0].ndim))
+    # a copy: the caller's dict from pybmd.utils.weights must survive the
+    # fit, or a second decomposition reusing it normalizes twice
+    weights = np.array(weights, dtype=float)
+    expected = tuple(data.shape[1:-1]) + (int(n_vars),)
+    if weights.shape != expected:
+        raise ValueError(
+            f'variable-wise normalization needs weights of shape {expected} '
+            f'(the spatial shape plus a variable axis); got {weights.shape}. '
+            f'A purely spatial weight, as CBMD uses, has no variable axis to '
+            f'normalize along.')
+    axis = tuple(range(data.ndim - 1))
+    eps = np.finfo(float).eps
     for i in range(0, n_vars):
-        var = np.nanvar(data[..., i], axis=axis)
-        if comm is not None:
-            # every rank holds the same replicated data, so no reduction is
-            # needed; kept explicit so the intent is not mistaken for an
-            # omission
-            pass
+        var = float(np.nanvar(data[..., i], axis=axis))
+        if not var > 4 * eps:
+            # a variable constant in time and space has no fluctuation to
+            # normalize by; leave its weight alone rather than divide by zero
+            var = 1.0
         weights[..., i] = weights[..., i] / var
     return weights

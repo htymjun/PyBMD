@@ -143,7 +143,7 @@ def _region_masks(k, l, regions):
     return {r: predicates[r] for r in sorted(regions)}
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class Triads:
     '''
     The set of frequency triplets a decomposition is computed over, together
@@ -152,6 +152,9 @@ class Triads:
     All per-triad arrays have length :attr:`n_triads` and are ordered
     row-major over the ``(i, j)`` index grid, matching the loop order of the
     reference MATLAB implementation.
+
+    ``eq=False``: the fields are arrays, so the generated ``__eq__`` and
+    ``__hash__`` would raise; instances compare by identity.
     '''
     freq: np.ndarray        #: (n_freq,) physical frequency, fftshifted
     f_idx: np.ndarray       #: (n_freq,) signed integer frequency index
@@ -254,11 +257,12 @@ class Triads:
         '''
         t = int(self.triad_map[self.row_of(k), self.row_of(l)])
         if t < 0:
+            bound = int(np.abs(self.k).max()) if self.n_triads else 0
             raise ValueError(
                 f'triad (k={k}, l={l}, k+l={k + l}) was not computed. It falls '
                 f'outside the requested regions '
                 f'{sorted(set(self.region.tolist()))} or exceeds the frequency '
-                f'index bound {int(np.abs(self.k).max())}.')
+                f'index bound {bound}.')
         return t
 
     def find_freq(self, f1, f2):
@@ -369,10 +373,11 @@ def normalize_mode(psi, weights):
     w = np.asarray(weights).reshape(-1)
     # vdot conjugates its first argument; take the real part explicitly, since
     # round-off can otherwise leave a tiny imaginary residue in a quantity that
-    # is real and positive by construction
-    nrm = np.sqrt(np.real(np.vdot(psi, psi * w)))
-    if nrm <= 0:
+    # is real and positive by construction. Test the inner product itself, not
+    # its square root: sqrt of a negative value is NaN, and NaN <= 0 is False
+    ip = np.real(np.vdot(psi, psi * w))
+    if not ip > 0:
         raise ValueError(
             'mode has non-positive weighted norm; check that weights are '
             'strictly positive.')
-    return psi / nrm
+    return psi / np.sqrt(ip)

@@ -43,3 +43,18 @@ def test_pow2_scale_passes_through_non_finite_matrix():
     A = np.eye(3, dtype=complex)
     A[0, 0] = np.inf
     assert np.array_equal(_pow2_scale(A), A)
+
+
+@pytest.mark.parametrize('norm', [1.5e-309, 1e-315])
+def test_pow2_scale_handles_a_subnormal_norm(norm):
+    '''When ||A||_1 is subnormal so is 2**e, and dividing by it overflows to
+    inf; the scaling must stay finite (and mengi_overton must not crash).'''
+    from pybmd.bmd.optimizers import mengi_overton
+    rng = np.random.default_rng(1)
+    A = rng.standard_normal((5, 5)) + 1j * rng.standard_normal((5, 5))
+    A = A / np.linalg.norm(A, 1) * norm
+    scaled = _pow2_scale(A)
+    assert np.all(np.isfinite(scaled))
+    assert 0.5 < np.linalg.norm(scaled, 1) <= 1.0
+    w, z = mengi_overton(A)
+    assert np.isfinite(w) and np.linalg.norm(z) == pytest.approx(1.0)

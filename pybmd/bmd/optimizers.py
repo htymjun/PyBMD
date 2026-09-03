@@ -130,8 +130,13 @@ def _pow2_scale(A):
     norm_1 = float(np.linalg.norm(A, 1))
     if norm_1 == 0.0 or not np.isfinite(norm_1):
         return A
-    scale = np.ldexp(1.0, int(np.ceil(np.log2(norm_1))))
-    return A / scale
+    # ldexp applies the power of two exactly and, unlike dividing by 2**e,
+    # cannot overflow when the norm is subnormal (2**e is then itself
+    # subnormal, and complex division by it produces inf)
+    e = int(np.ceil(np.log2(norm_1)))
+    if np.iscomplexobj(A):
+        return np.ldexp(A.real, -e) + 1j * np.ldexp(A.imag, -e)
+    return np.ldexp(A, -e)
 
 
 def default_start(A, n_scan=16):
@@ -179,13 +184,21 @@ def simple_iteration(A, z_0=None, tol=1e-8, n_it_max=100):
 
     :param numpy.ndarray A: square complex matrix.
     :param numpy.ndarray z_0: start vector. Default is :func:`default_start`.
-    :param float tol: convergence tolerance on ``|w - w_old|``. Default is 1e-8.
+    :param float tol: convergence tolerance on ``|w - w_old|``, applied to the
+        power-of-two rescaled matrix (``||A||_1`` in ``(0.5, 1]``, see
+        :func:`_pow2_scale`), so that it acts as a *relative* tolerance
+        whatever the scale of ``A``. Default is 1e-8.
     :param int n_it_max: maximum number of iterations. Default is 100.
 
     :return: the value ``w = z^H A z`` and the maximiser ``z``.
     :rtype: tuple(complex, numpy.ndarray)
     '''
-    A = np.asarray(A)
+    A_in = np.asarray(A)
+    # iterate on a rescaled copy: the stopping test below is absolute, and the
+    # matrices BMD produces are tiny (see _pow2_scale), so on the raw matrix it
+    # would fire after one or two updates. The maximiser is unchanged by the
+    # scaling; the value is recovered on the original matrix at the end.
+    A = _pow2_scale(A_in)
     if z_0 is None:
         z_0 = default_start(A)
     z = np.asarray(z_0, dtype=complex).ravel()
@@ -210,7 +223,7 @@ def simple_iteration(A, z_0=None, tol=1e-8, n_it_max=100):
         it += 1
         if it > n_it_max:
             break
-    return z.conj() @ A @ z, z
+    return z.conj() @ A_in @ z, z
 
 
 def mengi_overton(A, tol=1e-8, n_it_max=500, matlab_compat=False):
@@ -229,13 +242,15 @@ def mengi_overton(A, tol=1e-8, n_it_max=500, matlab_compat=False):
     :param float tol: level inflation factor and stopping tolerance.
         Default is 1e-8.
     :param int n_it_max: maximum number of level-set iterations. Default is 500.
-    :param bool matlab_compat: if True, revert the four deviations from
+    :param bool matlab_compat: if True, revert every deviation from
         ``refs/bmd/bmd.m``'s own ``MengiOverton`` documented in ``CLAUDE.md``
-        and reproduce that function instead -- no ``_pow2_scale``, unsigned
-        (modulus) ``max_fov``, the level filter ``sqrt(eps)*w`` rather than
-        ``sqrt(eps)*max(w,1.0)``, and no pre-rounding before ``np.unique`` on
-        the crossing angles. Also reachable as ``solver='MengiOvertonMATLAB'``
-        via :func:`solve`.
+        that has a MATLAB behaviour to revert to, and reproduce that function
+        instead -- no ``_pow2_scale``, unsigned (modulus) ``max_fov``, the
+        level filter ``sqrt(eps)*w`` rather than ``sqrt(eps)*max(w,1.0)``, and
+        no pre-rounding before ``np.unique`` on the crossing angles. (The
+        deterministic start is not a deviation of this solver: the reference's
+        Mengi-Overton is RNG-free too.) Also reachable as
+        ``solver='MengiOvertonMATLAB'`` via :func:`solve`.
 
         This exists **only** to reproduce a specific published MATLAB result,
         never to analyse new data with: because ``bmd.m``'s unimodularity

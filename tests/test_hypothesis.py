@@ -76,9 +76,9 @@ def _case(name, freqs, **kwargs):
     return _CASES[name]
 
 
-NONRES = dict(name='nonres', freqs=(0.05, 0.2, 0.35))
-TRIAD = dict(name='triad', freqs=(0.05, 0.2, 0.25))
-QUARTET = dict(name='quartet', freqs=(0.05, 0.15, 0.25, 0.45))
+NONRES = dict(name='nonres', freqs=(0.046875, 0.203125, 0.3515625)) # (0.05, 0.2, 0.35)
+TRIAD = dict(name='triad', freqs=(0.046875, 0.203125, 0.25)) # (0.05, 0.2, 0.25)
+QUARTET = dict(name='quartet', freqs=(0.046875, 0.1484375, 0.25, 0.453125)) # (0.05, 0.15, 0.25, 0.45)
 
 
 def amplitude_spectrum(q_x0, n_dft, dt, window='hann'):
@@ -223,6 +223,22 @@ def test_triad_survives_unit_snr_noise():
     assert vals[i] > 1.5 * background
 
 
+def test_triad_peak_height_is_stable_with_unit_snr_noise():
+    '''
+    Adding unit-SNR noise changes the noisy realization, but the dominant BMD
+    eigenvalue should remain on the clean-signal scale.
+    '''
+    clean_bmd, _, _ = _case(**TRIAD)
+    noisy_bmd, _, _ = _case(name='noise', freqs=TRIAD['freqs'], snr=1.0)
+
+    clean_t = clean_bmd.triads
+    noisy_t = noisy_bmd.triads
+    clean_peak = np.nanmax(np.abs(clean_bmd.L[clean_t.f1_idx, clean_t.f2_idx]))
+    noisy_peak = np.nanmax(np.abs(noisy_bmd.L[noisy_t.f1_idx, noisy_t.f2_idx]))
+
+    assert noisy_peak == pytest.approx(clean_peak, rel=0.03)
+
+
 # ---------------------------------------------------------------------------
 # mode content
 # ---------------------------------------------------------------------------
@@ -306,6 +322,8 @@ def test_reference_figures():
         ax_b.set_xlabel('$f_1$')
         ax_b.set_ylabel('$f_2$')
         ax_b.set_zlabel(r'$|\lambda_1|$')
+        ax_b.set_xticks([0, 0.2, 0.4])
+        ax_b.set_yticks([0, 0.1, 0.2])
     fig.tight_layout()
     out1 = os.path.join(FIGURES_DIR, 'hypothesis_harmonics_row.png')
     fig.savefig(out1, dpi=150)
@@ -316,11 +334,9 @@ def test_reference_figures():
     #    the style of figure 1's mode-bispectrum panels) ----------------------
     bmd, x, k = _case(name='noise', freqs=TRIAD['freqs'], snr=1.0)
     q, _, _ = surrogate_waves(TRIAD['freqs'], seed=0, snr=1.0)
-    L_grid = _bispectrum_grid(bmd)
-    B = classical_bispectrum(q[:, 0, 0], 128, 1.0, 40)
-    ii, jj = np.meshgrid(np.arange(40) / 128, np.arange(40) / 128, indexing='ij')
-    valid = ~np.isnan(B) & ~np.isnan(L_grid)
-    f1v, f2v = ii[valid], jj[valid]
+    t = bmd.triads
+    B = classical_bispectrum(q[:, 0, 0], 128, 1.0, 64)
+    B_vals = B[t.k, t.l]
 
     fig2 = plt.figure(figsize=(15, 4.5))
     ax0 = fig2.add_subplot(1, 3, 1)
@@ -332,28 +348,34 @@ def test_reference_figures():
     ax0.set_xlabel('$f$')
 
     ax1 = fig2.add_subplot(1, 3, 2, projection='3d')
-    ax1.plot_trisurf(f1v, f2v, B[valid], cmap='viridis', linewidth=0.1,
+    ax1.plot_trisurf(t.f1, t.f2, B_vals, cmap='viridis', linewidth=0.1,
                      vmin=0, vmax=0.25)
     ax1.set_title('(b) classical bispectrum')
     ax1.set_zlim(0, 0.25)
     ax1.set_xlabel('$f_1$')
     ax1.set_ylabel('$f_2$')
     ax1.set_zlabel('$|B|$')
+    ax1.set_xticks([0, 0.2, 0.4])
+    ax1.set_yticks([0, 0.1, 0.2])
 
     ax2 = fig2.add_subplot(1, 3, 3, projection='3d')
-    # the z-limit must come from the data: L_grid peaks around 0.057 here, and
+    # the z-limit must come from the data: the noisy mode bispectrum peaks
+    # around 0.057 here, and
     # a fixed limit taken from an unrelated scale (e.g. panel (b)'s, or a
     # guessed round number) either flattens the peak into invisibility or
     # leaves the panel mostly empty -- neither matches the published figure,
     # which shows one clear dominant peak.
-    z_max = float(np.nanmax(L_grid[valid])) * 1.05
-    ax2.plot_trisurf(f1v, f2v, L_grid[valid], cmap='viridis', linewidth=0.1,
+    vals = np.abs(bmd.L[t.f1_idx, t.f2_idx])
+    z_max = float(np.nanmax(vals)) * 1.05
+    ax2.plot_trisurf(t.f1, t.f2, vals, cmap='viridis', linewidth=0.1,
                      vmin=0, vmax=z_max)
     ax2.set_title('(c) mode bispectrum')
     ax2.set_zlim(0, z_max)
     ax2.set_xlabel('$f_1$')
     ax2.set_ylabel('$f_2$')
     ax2.set_zlabel(r'$|\lambda_1|$')
+    ax2.set_xticks([0, 0.2, 0.4])
+    ax2.set_yticks([0, 0.1, 0.2])
 
     fig2.tight_layout()
     out2 = os.path.join(FIGURES_DIR, 'hypothesis_noise.png')

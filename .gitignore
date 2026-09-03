@@ -10,6 +10,7 @@ htmlcov/
 # results written by fit() and by the examples
 bmd_results/
 example*_out/
+cylinder_sumdiff_out/
 
 # refs/ holds copies of external reference material used only for local/CI
 # cross-validation (see docs/octave_cross_validation.md). The MATLAB source

@@ -21,7 +21,7 @@ than to "PyBMD vs. MATLAB" as a whole:
   matrices, with a dense angular scan plus local refinement as an independent
   check -- this is where the deviations documented in ``CLAUDE.md`` live.
 
-See ``docs/octave_cross_validation.md`` for the full measured tables.
+See ``tests/octave/octave_cross_validation.md`` for the full measured tables.
 '''
 import os
 import sys
@@ -255,7 +255,7 @@ def test_tier_c_full_dataset_matches_measured_deviation(
     (regions=[1,2], max_freq_idx=12) on the full cylinder-wake dataset, and
     pins the measured counts as a regression: 52/169 triads off by >1%,
     29/169 by >10%, always an under-estimate. See
-    docs/octave_cross_validation.md for the full table this comes from.
+    tests/octave/octave_cross_validation.md for the full table this comes from.
     '''
     import scipy.io
     mat_path = oref.require_full_dataset()

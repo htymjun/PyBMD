@@ -114,7 +114,9 @@ cbmd = Cross(params=dict(params, state_idx=[0], qr_idx=[[1, 2]]),
 ```
 
 See [`examples/`](examples/) for the three worked cases, which mirror `example1.m`–`example3.m` of
-the original MATLAB implementation.
+the original MATLAB implementation, and for two reproductions of Schmidt (2020)'s figures:
+`hypothesis_testing.py` (surrogate data) and `cylinder_bispectrum.py` (cylinder-wake mode
+bispectrum; see `cylinder_bispectrum.md`).
 
 ## Parameters
 
@@ -183,7 +185,7 @@ is the default.
 `MengiOverton` bug-for-bug, confirmed live
 against the real MATLAB source under Octave to a few micro-relative on well-scaled problems. It
 exists **only** to reproduce a specific published MATLAB result — it reproduces a confirmed
-under-estimation bug and should never be used to analyse new data. See `docs/octave_cross_validation.md`
+under-estimation bug and should never be used to analyse new data. See `tests/octave/octave_cross_validation.md`
 for the measured figures and `pybmd.bmd.optimizers.mengi_overton`'s docstring for the caveats.
 
 ## Testing

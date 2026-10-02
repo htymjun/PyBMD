@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 '''
-Regenerate the figures embedded in ``docs/octave_cross_validation.md``.
+Regenerate the figures embedded in ``octave_cross_validation.md`` (written
+to ``figures/`` next to this file).
 
 Requires ``octave-cli`` on PATH and the ``refs/bmd`` submodule populated
 (``git submodule update --init``); run from anywhere, paths are resolved
 relative to this file.
 
-    python docs/build_octave_report.py
+    python tests/octave/build_report.py
 '''
 import os
 import shutil
@@ -19,12 +20,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 import scipy.io
 
-DOCS_DIR = os.path.dirname(os.path.realpath(__file__))
-REPO_ROOT = os.path.realpath(os.path.join(DOCS_DIR, '..'))
-FIG_DIR = os.path.join(DOCS_DIR, 'figures', 'octave')
+OCTAVE_DIR = os.path.dirname(os.path.realpath(__file__))
+REPO_ROOT = os.path.realpath(os.path.join(OCTAVE_DIR, '..', '..'))
+FIG_DIR = os.path.join(OCTAVE_DIR, 'figures')
 sys.path.insert(0, REPO_ROOT)
-sys.path.insert(0, os.path.join(REPO_ROOT, 'tests', 'octave'))
-sys.path.insert(0, os.path.join(REPO_ROOT, 'tests'))
+sys.path.insert(0, OCTAVE_DIR)
 
 from pybmd.bmd.standard import Standard
 from pybmd.bmd.postproc import plot_mode_bispectrum
@@ -32,9 +32,8 @@ import pybmd.bmd.utils as utils_bmd
 import pybmd.utils.weights as utils_weights
 
 import octave_ref as oref
-# the paper's surrogate-data recipe, reused rather than duplicated -- see
-# test_hypothesis.py's own docstring for the recipe itself
-from test_hypothesis import surrogate_waves, TRIAD
+# the paper's surrogate-data recipe, reused rather than duplicated
+from examples.hypothesis_testing import surrogate_waves, TRIAD
 
 
 def _check_prereqs():
@@ -51,7 +50,7 @@ def _check_prereqs():
 
 def _full_dataset_run(pybmd_solver='MengiOverton'):
     '''
-    PyBMD and reference L, at the config docs/octave_cross_validation.md
+    PyBMD and reference L, at the config octave_cross_validation.md
     cites. ``pybmd_solver`` selects PyBMD's own solver; the reference side
     always runs bmd.m's own MengiOverton -- the fixed point of comparison.
     '''
@@ -198,7 +197,7 @@ def fig_three_way_solver_comparison(bmd, L_ref):
 def _hypothesis_run(freqs, snr, max_freq_idx=40, n_dft=128, seed=0):
     '''
     PyBMD (three solvers) and the reference bmd.m (two solvers) on one
-    hypothesis-test surrogate case -- see test_hypothesis.py's
+    hypothesis-test surrogate case -- see examples/hypothesis_testing.py's
     ``surrogate_waves`` for the recipe this reproduces exactly (n_dft=128,
     overlap=0, Hann window, regions=[1], 10 blocks).
 

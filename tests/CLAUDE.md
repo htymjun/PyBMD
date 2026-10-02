@@ -45,6 +45,6 @@ is a file-local subfunction Octave cannot call from outside `bmd.m`, so
 `test_default_window_matches_reference` evaluates the *transcribed formula* under Octave — it
 checks NumPy against Octave arithmetic on `bmd.m:310`'s expression, not the file itself. `.github/workflows/octave_reference.yml` runs it
 in CI (checks out the submodule, `apt-get install`s Octave). See
-[`docs/octave_cross_validation.md`](../docs/octave_cross_validation.md) for the method (three
+[`tests/octave/octave_cross_validation.md`](octave/octave_cross_validation.md) for the method (three
 comparison tiers, isolating the DFT/blocking/weighting stage from the solver) and the full measured
 tables, with figures.

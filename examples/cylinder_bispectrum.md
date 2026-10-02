@@ -1,12 +1,12 @@
 # Cylinder Wake Mode Bispectrum
 
-`docs/build_cylinder_figure.py` reproduces the cylinder-wake mode-bispectrum figure from Schmidt
+`examples/cylinder_bispectrum.py` reproduces the cylinder-wake mode-bispectrum figure from Schmidt
 (2020, *Nonlinear Dynamics*), `refs/figures/cylinder_bispectrum_sumdiff.pdf`, with PyBMD on the
 `refs/bmd/wake_Re500.mat` dataset (the `refs/bmd` git submodule).
 
 ```bash
 git submodule update --init
-MPLBACKEND=Agg python docs/build_cylinder_figure.py
+MPLBACKEND=Agg python examples/cylinder_bispectrum.py   # ~4 min
 ```
 
 ![Cylinder wake mode bispectrum](figures/cylinder/cylinder_bispectrum_sumdiff.png)
@@ -45,7 +45,7 @@ are not attempts to hide a bug:
    is a little weaker.
 
 The reference's colorbar (jet, with the dark-blue end faded to white) was reproduced by sampling
-its pixels directly rather than guessed; see `_CBAR_STOPS` in `build_cylinder_figure.py`.
+its pixels directly rather than guessed; see `CMAP` in `cylinder_bispectrum.py`.
 
 ### Spatial weight: match `bmd.m`'s own default, not a "better" one
 

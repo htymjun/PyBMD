@@ -2,7 +2,7 @@
 Cross-validation harness against the original MATLAB ``bmd.m``/``cbmd.m``,
 run unmodified (Tier B) or lightly instrumented (Tier A) under Octave.
 
-See ``docs/octave_cross_validation.md`` for the fairness rules this module
+See ``tests/octave/octave_cross_validation.md`` for the fairness rules this module
 exists to enforce (weight flatten order, single- vs double-precision input,
 window/overlap parity, the CBMD variable-axis position, ...), and
 ``tests/test_octave_reference.py`` for the tests that use it.

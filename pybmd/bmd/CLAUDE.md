@@ -77,7 +77,7 @@ some triad actually references. With `max_freq_idx` set that is a small fraction
 Each fixes a silent wrong answer; all three are covered by regression tests. Measured end-to-end
 on the 169 triads of the full cylinder-wake dataset (`regions=[1,2]`, `max_freq_idx=12`), run
 *directly under Octave* against `refs/bmd/bmd.m` itself (see
-[`docs/octave_cross_validation.md`](../../docs/octave_cross_validation.md)): `MengiOverton` matches a
+[`tests/octave/octave_cross_validation.md`](../../tests/octave/octave_cross_validation.md)): `MengiOverton` matches a
 brute-force scan of the numerical radius to ~5e-8, the genuine `refs/bmd.m` is off by >1% on 52 of
 the 169 triads (>10% on 29), always an *under*-estimate, since `B = Q3^H (Q1∘Q2∘w)/n_blocks` is
 tiny (median `‖B‖₁ ~ 5.2e-6` there). These figures were originally measured against a Python
@@ -108,7 +108,7 @@ the original), otherwise its absolute `|w − w_old| ≤ tol` stopping test fire
 the tiny matrices BMD produces.
 
 Confirmed live under Octave, for both `bmd.m` and `cbmd.m` (see
-[`docs/octave_cross_validation.md`](../../docs/octave_cross_validation.md)): the reference's actually
+[`tests/octave/octave_cross_validation.md`](../../tests/octave/octave_cross_validation.md)): the reference's actually
 *reachable* solvers are `'MengiOverton'` and `'HeWatson'`. `'simpleIteration'` passes the option
 validator but the inner `switch` has no matching case (`case {'simpleit'}` is what's there instead)
 and errors with `'Unknown solver.'`; `'eig'` fails the same way; `'simpleit'` itself fails the
@@ -130,7 +130,7 @@ first pass. PyBMD has no use for a solver that needs an unseeded random start ve
 `simpleIteration` already reproduces the underlying algorithm deterministically via
 `default_start` — confirmed live on the paper's own hypothesis-test triad case (`tests/test_hypothesis.py`'s
 surrogate-data recipe, run through both implementations; see
-[`docs/octave_cross_validation.md`](../../docs/octave_cross_validation.md)): `simpleIteration` agrees
+[`tests/octave/octave_cross_validation.md`](../../tests/octave/octave_cross_validation.md)): `simpleIteration` agrees
 with `MengiOverton` everywhere there (max relative deviation
 4.4e-4, 0/780 triads above 1%), while `refs/bmd.m`'s `HeWatson` disagrees with both on up to
 753/780 triads on the flat, non-resonant case — random-start non-convergence on a featureless
@@ -155,7 +155,7 @@ without noise (`‖B‖₁ ~ 3.5e-9`) — reproducing a branch decision taken ex
 boundary is inherently unstable across LAPACK builds and language boundaries, and is not a defect
 to chase further. Validated live against Octave in
 `tests/test_octave_reference.py::test_tier_c_matlab_compat_reproduces_reference`; see
-[`docs/octave_cross_validation.md`](../../docs/octave_cross_validation.md) for the figures.
+[`tests/octave/octave_cross_validation.md`](../../tests/octave/octave_cross_validation.md) for the figures.
 
 ## Conventions that bite
 

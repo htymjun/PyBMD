@@ -31,7 +31,7 @@ def test_matlab_compat_underestimates_on_tiny_matrix():
     w_compat, _ = mengi_overton(A, tol=1e-6, n_it_max=500, matlab_compat=True)
 
     # never exceeds the corrected solver, matching the one-sided invariant
-    # measured live against the real bmd.m (docs/octave_cross_validation.md)
+    # measured live against the real bmd.m (tests/octave/octave_cross_validation.md)
     assert abs(w_compat) <= abs(w_default) * (1 + 1e-8)
     # and, at this scale, is materially lower -- not merely numerically equal
     assert abs(w_compat) < abs(w_default) * 0.9

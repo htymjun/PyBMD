@@ -14,7 +14,8 @@ import numpy as np
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), '..'))
 
 from pybmd.bmd.standard import Standard
-from pybmd.bmd.postproc import plot_mode_bispectrum, plot_triad_modes
+from pybmd.bmd.postproc import (plot_mode_bispectrum, plot_triad_modes,
+                                top_triads)
 import pybmd.utils.weights as utils_weights
 from examples.data import load_cylinder_wake
 
@@ -42,21 +43,16 @@ def main(save_dir='example1_out'):
     weights = utils_weights.trapz_2d(x[:, 0], y[0, :], n_vars=1)
     bmd = Standard(params=params, weights=weights).fit(data)
 
-    ## the strongest triad, found through the triad map rather than by index
-    triads = bmd.triads
-    vals = np.abs(bmd.L[triads.f1_idx, triads.f2_idx])
-    i_peak = int(np.argmax(vals[triads.k != 0]))
-    i_peak = int(np.flatnonzero(triads.k != 0)[i_peak])
-    k, l = int(triads.k[i_peak]), int(triads.l[i_peak])
+    ## the strongest triad with k, l both non-zero
+    peak = top_triads(bmd, n=1)[0]
+    k, l = int(peak['k']), int(peak['l'])
     print(f'strongest triad: (k,l,k+l) = ({k},{l},{k + l}), '
-          f'|lambda_1| = {vals[i_peak]:.4e}')
+          f"|lambda_1| = {peak['value']:.4e}")
 
-    plot_mode_bispectrum(
-        bmd.L, bmd.freq, mark=[(triads.f1[i_peak], triads.f2[i_peak])],
-        path=save_dir, filename='bispectrum.png')
-    plot_triad_modes(
-        bmd.get_modes_at_triad(i_peak), k, l, x1=x[:, 0], x2=y[0, :],
-        path=save_dir, filename='modes.png')
+    plot_mode_bispectrum(bmd.L, bmd.freq, mark=[(peak['f1'], peak['f2'])],
+                         path=save_dir, filename='bispectrum.png')
+    plot_triad_modes(bmd.get_modes_at_freqs(k, l), k, l, x1=x[:, 0], x2=y[0, :],
+                     path=save_dir, filename='modes.png')
     print(f'figures written to {os.path.abspath(save_dir)}')
     return bmd
 

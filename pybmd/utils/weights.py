@@ -83,14 +83,6 @@ def trapz_3d(x1, x2, x3, n_vars=1):
     return {'weights_name': 'trapz_3d', 'weights': dV}
 
 
-def custom(**kwargs):
-    '''
-    Customized weights, to be implemented by the user if required. The returned
-    array must have the shape documented at the top of this module.
-    '''
-    pass
-
-
 def apply_normalization(data, weights, n_vars, method='variance', comm=None):
     '''
     Normalize the weights variable-wise by the data variance.

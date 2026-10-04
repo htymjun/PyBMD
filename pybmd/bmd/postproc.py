@@ -155,8 +155,8 @@ def top_triads(results, n=10, quantity='L', exclude_zero=True):
     '''
     Return the strongest triads in a loaded result.
 
-    :param BMDResults or str results: loaded results, or a directory accepted
-        by :func:`load_results`.
+    :param results: a :class:`BMDResults`, a fitted ``Standard``/``Cross``,
+        or a results directory accepted by :func:`load_results`.
     :param int n: number of triads to return.
     :param str quantity: ``'L'`` for mode bispectrum or ``'T'`` for energy
         transfer magnitude.
@@ -166,7 +166,7 @@ def top_triads(results, n=10, quantity='L', exclude_zero=True):
         frequencies, region, and value.
     :rtype: numpy.ndarray
     '''
-    if not isinstance(results, BMDResults):
+    if isinstance(results, (str, os.PathLike)):
         results = load_results(results)
 
     quantity = quantity.upper()

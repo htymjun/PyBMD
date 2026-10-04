@@ -259,7 +259,7 @@ def mengi_overton(A, tol=1e-8, n_it_max=500, matlab_compat=False):
         weights), every genuine level-set crossing is rejected and the search
         returns a local value at ``theta=0`` -- always an *under*-estimate,
         confirmed live under Octave against the real ``bmd.m``/``cbmd.m`` (see
-        ``docs/octave_cross_validation.md``): 52/169 triads off by >1% (29 by
+        ``tests/octave/octave_cross_validation.md``): 52/169 triads off by >1% (29 by
         >10%) on the full cylinder-wake fixture. ``matlab_compat=True``
         reproduces that under-estimate to ~4e-6 relative when ``B`` is
         reasonably well scaled (``||B||_1 >~ 1e-6``); as ``||B||_1`` falls
@@ -267,7 +267,7 @@ def mengi_overton(A, tol=1e-8, n_it_max=500, matlab_compat=False):
         noise-free cases of the paper's hypothesis test) the branch decisions
         it is reproducing sit exactly at the tolerance boundary, so agreement
         degrades and is not a defect to chase further -- see
-        ``docs/octave_cross_validation.md`` for the measured figures.
+        ``tests/octave/octave_cross_validation.md`` for the measured figures.
 
     :return: the value ``w = z^H A z`` and the maximiser ``z``.
     :rtype: tuple(complex, numpy.ndarray)

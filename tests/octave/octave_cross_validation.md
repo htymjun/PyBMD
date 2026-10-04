@@ -61,20 +61,20 @@ Side by side on the full cylinder-wake fixture (`regions=[1,2]`, `max_freq_idx=1
 PyBMD's mode bispectrum and the reference's look qualitatively the same but disagree exactly where
 Tier C predicts:
 
-![Mode bispectrum: PyBMD vs. the reference](figures/octave/bispectrum_comparison.png)
+![Mode bispectrum: PyBMD vs. the reference](figures/bispectrum_comparison.png)
 
 The per-triad relative deviation, mapped onto the `(k,l)` plane, never exceeds PyBMD and is
 concentrated where `|λ₁|` is smallest — an under-estimate confined to the weak triads, not a
 uniform mismatch:
 
-![Per-triad deviation heatmap](figures/octave/deviation_heatmap.png)
+![Per-triad deviation heatmap](figures/deviation_heatmap.png)
 
 A correct solver for the numerical radius is exactly scale-equivariant, `r(cA) = c·r(A)`. Running
 the unmodified reference on a random case and on a `1e-2` rescale of it shows the reference itself
 violating this by up to 32% on this random case — independent confirmation that the fault is in
 `bmd.m`'s solver, not in anything PyBMD does to the data before comparing:
 
-![Reference scale-equivariance error](figures/octave/scale_equivariance.png)
+![Reference scale-equivariance error](figures/scale_equivariance.png)
 
 ## Solver comparison and the MATLAB-compatible solver
 
@@ -123,7 +123,7 @@ essentially the whole gap, and all three only reproduce `bmd.m` applied together
 | only `_pow2_scale` reverted | 2.810e-01 | 1/81 |
 | only the `max(w,1)` clamp reverted | 6.663e-01 | 7/81 |
 
-![Three-way solver comparison](figures/octave/three_way_solver_comparison.png)
+![Three-way solver comparison](figures/three_way_solver_comparison.png)
 
 The deviation maps in the (k,l) plane (bottom row) are visually near-identical between the
 reference and `MengiOvertonMATLAB` — the compat solver reproduces not just the aggregate counts
@@ -154,7 +154,7 @@ surrogate-data recipe in `tests/test_hypothesis.py` (`n_dft=128`, `overlap=0`, H
 | triad, no noise | 3.48e-09 | (26, 6), 0.04052 |
 | triad, SNR = 1 | 2.15e-03 | (26, 6), 0.05659 |
 
-![Hypothesis test, PyBMD vs. bmd.m](figures/octave/hypothesis_pybmd_vs_matlab.png)
+![Hypothesis test, PyBMD vs. bmd.m](figures/hypothesis_pybmd_vs_matlab.png)
 
 Per-triad deviation from PyBMD's `MengiOverton`:
 
@@ -183,10 +183,10 @@ Three conclusions:
 
 ## Regenerating Figures
 
-The report figures in `docs/figures/octave/` can be regenerated with:
+The report figures in `tests/octave/figures/` can be regenerated with:
 
 ```bash
-python docs/build_octave_report.py
+python tests/octave/build_report.py
 ```
 
 That script requires Octave and the populated `refs/bmd` submodule, and takes a few minutes: it

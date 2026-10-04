@@ -1,10 +1,7 @@
 '''Derived module from base.py for cross-bispectral mode decomposition.'''
-import time
-
 import numpy as np
 
 from pybmd.bmd.base import Base
-import pybmd.utils.parallel as utils_par
 
 
 class Cross(Base):
@@ -36,6 +33,8 @@ class Cross(Base):
         Schmidt, O. T., *Bispectral mode decomposition of nonlinear flows*,
         Nonlinear Dynamics, 2020. DOI 10.1007/s11071-020-06037-z
     '''
+
+    _label = 'CBMD'
 
     def __init__(self, params, weights=None, comm=None, mean=None):
         super().__init__(params, weights=weights, comm=comm, mean=mean)
@@ -93,8 +92,20 @@ class Cross(Base):
         '''
         return tuple(self._xshape)
 
-    def _mode_elements(self):
-        return self.n_state * self._nx
+    @property
+    def _mode_shape(self):
+        return (*self._xshape, self.n_state)
+
+    def _block_shape(self):
+        # (nx, nv), so that q_hat[f][:, v] is a contiguous slice
+        return (self._nx, self._nv)
+
+    def _post_initialize(self):
+        # the same spatial weight applies to every state; tile the whole
+        # spatial vector n_state times (a per-element repeat would scramble it)
+        self._weights_tiled = np.tile(self._weights, (self.n_state, 1))
+        self._pr0(f'State indices            : {self._state_idx.tolist()}')
+        self._pr0(f'q*r indices              : {self._qr_idx.tolist()}')
 
     def _unflatten_modes(self, psi):
         '''
@@ -107,48 +118,6 @@ class Cross(Base):
         '''
         psi = psi.reshape((psi.shape[0], self.n_state, *self._xshape))
         return np.moveaxis(psi, 1, -1)
-
-    def fit(self, data_list):
-        '''
-        Class-specific method to fit the data matrix using the CBMD algorithm.
-
-        :param data_list: data matrix of shape ``(nt, *xshape, n_variables)``,
-            or path(s) to it.
-
-        :return: the fitted object.
-        :rtype: Cross
-        '''
-        start0 = time.time()
-
-        start = time.time()
-        self._initialize(data_list)
-        self._mode_shape = (*self._xshape, self.n_state)
-        # the same spatial weight applies to every state; tile the whole
-        # spatial vector n_state times (a per-element repeat would scramble it)
-        self._weights_tiled = np.tile(self._weights, (self.n_state, 1))
-        assert self._weights_tiled.shape == (self.n_state * self._nx, 1)
-        self._pr0(f'State indices            : {self._state_idx.tolist()}')
-        self._pr0(f'q*r indices              : {self._qr_idx.tolist()}')
-        self._pr0(f'Time to initialize: {time.time() - start} s.')
-
-        start = time.time()
-        q_hat = self._compute_qhat(block_shape=(self._nx, self._nv))
-        self._pr0(f'Time to compute DFT: {time.time() - start} s.')
-        del self.data
-        utils_par.barrier(self._comm)
-
-        start = time.time()
-        self._triad_loop(q_hat)
-        del q_hat
-        self._pr0(f'------------------------------------')
-        self._pr0(f'Time to compute CBMD: {time.time() - start} s.')
-
-        self._store_and_save()
-        self._pr0(f' ')
-        self._pr0(f'Results saved in folder {self._savedir_sim}')
-        self._pr0(f'Total time: {time.time() - start0} s.')
-        utils_par.barrier(self._comm)
-        return self
 
     def _triad_matrices(self, q_hat, i_triad):
         '''

@@ -6,22 +6,28 @@ commands and the project overview.
 
 ## The Base/Standard/Cross split
 
-`Base` owns everything: params, weights, mean, DFT blocking, the triad map, the solve loop, MPI,
-and storage. **Subclasses override only three things**, so the algorithm lives in exactly one place:
+`Base` owns everything, including `fit()` itself: params, weights, mean, DFT blocking, the triad
+map, the solve loop, MPI, and storage. **Subclasses override only the per-triad matrices and a few
+shape hooks**, so the algorithm lives in exactly one place:
 
 | | `Standard` (BMD) | `Cross` (CBMD) |
 | --- | --- | --- |
 | `_triad_matrices(q_hat, i)` | returns `(Q3, Q1*Q2, weights)` | stacks `n_state` blocks; sums the `q*r` terms |
 | `_constituent_matrices(q_hat, i)` | returns `(Q1, Q2)` (only with `constituent_modes`) | not supported — rejected at construction |
-| `_compute_qhat` block shape | `(nx*nv,)` | `(nx, nv)` so `q_hat[f][:, v]` is contiguous |
-| `define_weights` | `(*xshape, nv)` | overridden: `xshape`, **no variable axis** |
+| `_block_shape()` (one `q_hat` row) | `(nx*nv,)` | `(nx, nv)` so `q_hat[f][:, v]` is contiguous |
+| `_mode_shape` (property) | `(*xshape, nv)` | `(*xshape, n_state)` |
+| `_expected_weights_shape()` | `(*xshape, nv)` | `xshape`, **no variable axis** |
+| `_post_initialize()` | no-op | tiles the weights over the states, prints `state_idx`/`qr_idx` |
+| `_unflatten_modes(psi)` | plain reshape | state-slowest unflatten, see below |
+| `_label` | `'BMD'` | `'CBMD'` (timing print only) |
 
 Everything after `B = Q_sum^H (Q_prod * w) / n_blocks` is shared in `Base._triad_loop`.
 
 ## Data flow
 
-`fit()` → `_initialize` (dims, `n_blocks`, weights, mean, `Triads`, savedir — clearing stale
-`modes/triad_idx_*.npy` from an earlier run into the same directory — size guard) →
+`Base.fit()` → `_initialize` (dims, `n_blocks`, weights, mean, `Triads`, savedir — clearing stale
+`modes/triad_idx_*.npy` from an earlier run into the same directory — size guard, then
+`_post_initialize`) →
 `_compute_qhat` → `_triad_loop` → `_store_and_save` (arrays first, `params_modes.yaml` last, so a
 YAML failure cannot lose results).
 
@@ -37,8 +43,8 @@ some triad actually references. With `max_freq_idx` set that is a small fraction
   the states along the flat axis with the state **slowest** (`flat = j*nx + p`, matching
   `cbmd.m`'s `repmat`), so a C-order reshape straight into `(*xshape, n_state)` scrambles every
   `n_state > 1` mode. `_unflatten_modes` is the single place a flat mode becomes a field —
-  `Cross` overrides it to unflatten as `(n_state, *xshape)` and move the state axis last —
-  and `tests/test_cbmd.py::test_two_identical_states_give_identical_mode_slices` guards it.
+  `Cross` overrides it to unflatten as `(n_state, *xshape)` and move the state axis last;
+  `tests/test_octave_reference.py`'s CBMD tiers compare the modes against `cbmd.m`.
   The other hazards are the weights and a user `mean`: both are therefore checked against the
   full `(*xshape, nv)` shape and a bare flat vector (or the reference's variable-first layout) is
   **rejected**.
@@ -77,7 +83,7 @@ some triad actually references. With `max_freq_idx` set that is a small fraction
 Each fixes a silent wrong answer; all three are covered by regression tests. Measured end-to-end
 on the 169 triads of the full cylinder-wake dataset (`regions=[1,2]`, `max_freq_idx=12`), run
 *directly under Octave* against `refs/bmd/bmd.m` itself (see
-[`docs/octave_cross_validation.md`](../../docs/octave_cross_validation.md)): `MengiOverton` matches a
+[`tests/octave/octave_cross_validation.md`](../../tests/octave/octave_cross_validation.md)): `MengiOverton` matches a
 brute-force scan of the numerical radius to ~5e-8, the genuine `refs/bmd.m` is off by >1% on 52 of
 the 169 triads (>10% on 29), always an *under*-estimate, since `B = Q3^H (Q1∘Q2∘w)/n_blocks` is
 tiny (median `‖B‖₁ ~ 5.2e-6` there). These figures were originally measured against a Python
@@ -108,7 +114,7 @@ the original), otherwise its absolute `|w − w_old| ≤ tol` stopping test fire
 the tiny matrices BMD produces.
 
 Confirmed live under Octave, for both `bmd.m` and `cbmd.m` (see
-[`docs/octave_cross_validation.md`](../../docs/octave_cross_validation.md)): the reference's actually
+[`tests/octave/octave_cross_validation.md`](../../tests/octave/octave_cross_validation.md)): the reference's actually
 *reachable* solvers are `'MengiOverton'` and `'HeWatson'`. `'simpleIteration'` passes the option
 validator but the inner `switch` has no matching case (`case {'simpleit'}` is what's there instead)
 and errors with `'Unknown solver.'`; `'eig'` fails the same way; `'simpleit'` itself fails the
@@ -130,7 +136,7 @@ first pass. PyBMD has no use for a solver that needs an unseeded random start ve
 `simpleIteration` already reproduces the underlying algorithm deterministically via
 `default_start` — confirmed live on the paper's own hypothesis-test triad case (`tests/test_hypothesis.py`'s
 surrogate-data recipe, run through both implementations; see
-[`docs/octave_cross_validation.md`](../../docs/octave_cross_validation.md)): `simpleIteration` agrees
+[`tests/octave/octave_cross_validation.md`](../../tests/octave/octave_cross_validation.md)): `simpleIteration` agrees
 with `MengiOverton` everywhere there (max relative deviation
 4.4e-4, 0/780 triads above 1%), while `refs/bmd.m`'s `HeWatson` disagrees with both on up to
 753/780 triads on the flat, non-resonant case — random-start non-convergence on a featureless
@@ -155,7 +161,7 @@ without noise (`‖B‖₁ ~ 3.5e-9`) — reproducing a branch decision taken ex
 boundary is inherently unstable across LAPACK builds and language boundaries, and is not a defect
 to chase further. Validated live against Octave in
 `tests/test_octave_reference.py::test_tier_c_matlab_compat_reproduces_reference`; see
-[`docs/octave_cross_validation.md`](../../docs/octave_cross_validation.md) for the figures.
+[`tests/octave/octave_cross_validation.md`](../../tests/octave/octave_cross_validation.md) for the figures.
 
 ## Conventions that bite
 

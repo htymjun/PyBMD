@@ -1,9 +1,9 @@
 '''
-Base module for the BMD:
-    - The `Base.fit` method must be implemented in inherited classes
+Base module for the BMD: parameters, weights, mean, DFT blocking, the triad
+loop and storage. :class:`~pybmd.bmd.standard.Standard` and
+:class:`~pybmd.bmd.cross.Cross` only supply the per-triad matrices and the
+shape hooks below.
 '''
-from __future__ import division
-
 import glob
 import os
 import time
@@ -56,6 +56,8 @@ class Base():
     :param numpy.ndarray mean: long-time mean to subtract instead of the one
         computed from the data. Default is None.
     '''
+
+    _label = 'BMD'   # name used in the timing print
 
     def __init__(self, params, weights=None, comm=None, mean=None):
         ##--- required
@@ -143,17 +145,43 @@ class Base():
         self._window = self._set_dtype(self._window)
         self._resolve_overlap()
 
-    # --------------------------------------------------------------------------
-    # to be implemented by inherited classes
-    # --------------------------------------------------------------------------
-
-    def fit(self, data_list, *args, **kwargs):
+    def fit(self, data_list):
         '''
-        Fit the data using BMD.
+        Fit the data: initialize, DFT every block, solve every triad, save.
 
-        :param list data_list: data matrix for which to compute the BMD.
+        :param data_list: data matrix of shape ``(nt, *xshape, n_variables)``,
+            or path(s) to it.
+
+        :return: the fitted object.
         '''
-        raise NotImplementedError  # pragma: no cover
+        start0 = time.time()
+
+        start = time.time()
+        self._initialize(data_list)
+        self._pr0(f'Time to initialize: {time.time() - start} s.')
+
+        start = time.time()
+        q_hat = self._compute_qhat()
+        self._pr0(f'Time to compute DFT: {time.time() - start} s.')
+        del self.data
+        utils_par.barrier(self._comm)
+
+        start = time.time()
+        self._triad_loop(q_hat)
+        del q_hat
+        self._pr0(f'------------------------------------')
+        self._pr0(f'Time to compute {self._label}: {time.time() - start} s.')
+
+        self._store_and_save()
+        self._pr0(f' ')
+        self._pr0(f'Results saved in folder {self._savedir_sim}')
+        self._pr0(f'Total time: {time.time() - start0} s.')
+        utils_par.barrier(self._comm)
+        return self
+
+    # --------------------------------------------------------------------------
+    # hooks for inherited classes
+    # --------------------------------------------------------------------------
 
     def _triad_matrices(self, q_hat, i_triad):
         '''
@@ -182,10 +210,19 @@ class Base():
         '''Shape a user weight array must have: spatial shape plus variables.'''
         return tuple(self._xshape) + (self._nv,)
 
-    def _mode_elements(self):
-        '''Number of entries of one mode, i.e. the length of the flat axis
-        that :meth:`_triad_matrices` builds.'''
-        return self._nxv
+    @property
+    def _mode_shape(self):
+        '''Shape of one mode: the flat axis :meth:`_triad_matrices` builds,
+        unflattened.'''
+        return (*self._xshape, self._nv)
+
+    def _block_shape(self):
+        '''Shape of one frequency row of a block, as stored in ``q_hat``.'''
+        return (self._nxv,)
+
+    def _post_initialize(self):
+        '''Subclass set-up that needs the flattened weights; runs last in
+        :meth:`_initialize`.'''
 
     def _unflatten_modes(self, psi):
         '''
@@ -402,8 +439,11 @@ class Base():
         self._n_blocks = num // den
 
         # test feasibility
-        if (self._n_dft < 4) or (self._n_blocks < 2):
-            raise ValueError('Spectral estimation parameters not meaningful.')
+        if self._n_blocks < 2:
+            raise ValueError(
+                f'Spectral estimation parameters not meaningful: nt={self._nt}, '
+                f'n_dft={self._n_dft}, n_overlap={self._n_overlap} give '
+                f'{self._n_blocks} block(s), at least 2 are needed.')
 
         ## define and check weights
         self.define_weights()
@@ -462,7 +502,7 @@ class Base():
                               * self._n_blocks
                               * self._complex(1).nbytes * B2GB)
         self._modes_size_gb = (self._n_mode_comp * self.n_triads
-                               * self._mode_elements()
+                               * int(np.prod(self._mode_shape))
                                * self._complex(1).nbytes * B2GB)
         if ((self._save_modes or self._store_modes)
                 and self._modes_size_gb > self._max_modes_gb):
@@ -476,6 +516,7 @@ class Base():
 
         self._print_parameters()
         self._pr0(f'------------------------------------')
+        self._post_initialize()
 
     def define_weights(self):
         '''Define and check weights.'''
@@ -572,7 +613,8 @@ class Base():
             # standardize every point and variable to unit variance within the
             # block, i.e. divide by the standard deviation
             den = self._n_dft - 1
-            q_var = np.sum((q_blk - np.mean(q_blk, axis=0))**2, axis=0) / den
+            centered = q_blk - np.mean(q_blk, axis=0)
+            q_var = np.sum(np.abs(centered)**2, axis=0) / den
             q_var[q_var < 4 * np.finfo(q_blk.dtype).eps] = 1
             q_blk = q_blk / np.sqrt(q_var)
 
@@ -581,23 +623,22 @@ class Base():
         q_blk_hat = (self._win_weight / self._n_dft) * np.fft.fft(q_blk, axis=0)
         return np.fft.fftshift(q_blk_hat, axes=0), offset
 
-    def _compute_qhat(self, block_shape):
+    def _compute_qhat(self):
         '''
         Fourier realizations for every frequency row any triad refers to.
 
         Only the rows in ``triads.freq_needed`` are retained; for a bispectrum
         restricted by ``max_freq_idx`` that is a small fraction of ``n_dft``.
 
-        :param tuple block_shape: shape of one frequency row of a block.
-
         :return: mapping from frequency row to its ``(*block_shape, n_blocks)``
-            array of realizations.
+            array of realizations, ``block_shape`` being :meth:`_block_shape`.
         :rtype: dict
         '''
         self._pr0(f' ')
         self._pr0(f'Calculating temporal DFT')
         self._pr0(f'------------------------------------')
 
+        block_shape = self._block_shape()
         needed = self._triads.freq_needed
         q_hat = {int(f): np.empty((*block_shape, self._n_blocks),
                                  dtype=self._complex) for f in needed}

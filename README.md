@@ -9,8 +9,7 @@ associated with it, distinguishing sum- from difference-interactions and produci
 maps that identify the regions of nonlinear coupling.
 
 The architecture follows [PySPOD](https://github.com/MathEXLab/PySPOD): a `params`-dict-driven
-`Base`/`Standard` class pair, an optional MPI communicator, disk-backed mode storage, and a YAML
-config reader.
+`Base`/`Standard` class pair, an optional MPI communicator and disk-backed mode storage.
 
 ```
           f2 or l
@@ -114,9 +113,10 @@ cbmd = Cross(params=dict(params, state_idx=[0], qr_idx=[[1, 2]]),
 ```
 
 See [`examples/`](examples/) for the three worked cases, which mirror `example1.m`–`example3.m` of
-the original MATLAB implementation, and for two reproductions of Schmidt (2020)'s figures:
-`hypothesis_testing.py` (surrogate data) and `cylinder_bispectrum.py` (cylinder-wake mode
-bispectrum; see `cylinder_bispectrum.md`).
+the original MATLAB implementation, and for reproductions of Schmidt (2020)'s figures:
+`example4_hypothesis_testing.py` (surrogate data, Figs. 4 and 5)
+and `example5_cylinder_paper.py` (cylinder-wake mode bispectrum and modes, Figs. 7-9; see
+`example5_cylinder_paper.md`).
 
 ## Parameters
 
@@ -195,12 +195,10 @@ pytest                            # everything, ~90 s (Octave cross-validation, 
 pytest -m "not slow and not mpi"  # fast subset, ~30 s
 ```
 
-The suite verifies the bispectrum against a **closed-form analytic result** — for an on-grid,
-boxcar-windowed, block-random-phase signal, `L(k,l) = (a_k a_l a_{k+l} / 8) Σ w conj(φ_{k+l}) φ_k φ_l`
-for every triad — as well as conjugate symmetry, exact triad counts, CBMD reducing to BMD when the
-three variables coincide, bit-identical results between `mpirun -n 1` and `-n 2`, and a
-regression against the original MATLAB implementation run live under Octave on the cylinder-wake
-dataset (see [`tests/CLAUDE.md`](tests/CLAUDE.md)).
+The suite checks the numerical-radius solvers against brute force, reproduces Schmidt (2020)'s
+hypothesis test on surrogate data, asserts bit-identical results between `mpirun -n 1` and `-n 2`,
+and regresses `L`, `T`, the modes and CBMD against the original MATLAB implementation run live
+under Octave on the cylinder-wake dataset (see [`tests/CLAUDE.md`](tests/CLAUDE.md)).
 
 ## References
 

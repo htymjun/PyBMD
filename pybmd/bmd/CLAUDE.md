@@ -6,22 +6,28 @@ commands and the project overview.
 
 ## The Base/Standard/Cross split
 
-`Base` owns everything: params, weights, mean, DFT blocking, the triad map, the solve loop, MPI,
-and storage. **Subclasses override only three things**, so the algorithm lives in exactly one place:
+`Base` owns everything, including `fit()` itself: params, weights, mean, DFT blocking, the triad
+map, the solve loop, MPI, and storage. **Subclasses override only the per-triad matrices and a few
+shape hooks**, so the algorithm lives in exactly one place:
 
 | | `Standard` (BMD) | `Cross` (CBMD) |
 | --- | --- | --- |
 | `_triad_matrices(q_hat, i)` | returns `(Q3, Q1*Q2, weights)` | stacks `n_state` blocks; sums the `q*r` terms |
 | `_constituent_matrices(q_hat, i)` | returns `(Q1, Q2)` (only with `constituent_modes`) | not supported — rejected at construction |
-| `_compute_qhat` block shape | `(nx*nv,)` | `(nx, nv)` so `q_hat[f][:, v]` is contiguous |
-| `define_weights` | `(*xshape, nv)` | overridden: `xshape`, **no variable axis** |
+| `_block_shape()` (one `q_hat` row) | `(nx*nv,)` | `(nx, nv)` so `q_hat[f][:, v]` is contiguous |
+| `_mode_shape` (property) | `(*xshape, nv)` | `(*xshape, n_state)` |
+| `_expected_weights_shape()` | `(*xshape, nv)` | `xshape`, **no variable axis** |
+| `_post_initialize()` | no-op | tiles the weights over the states, prints `state_idx`/`qr_idx` |
+| `_unflatten_modes(psi)` | plain reshape | state-slowest unflatten, see below |
+| `_label` | `'BMD'` | `'CBMD'` (timing print only) |
 
 Everything after `B = Q_sum^H (Q_prod * w) / n_blocks` is shared in `Base._triad_loop`.
 
 ## Data flow
 
-`fit()` → `_initialize` (dims, `n_blocks`, weights, mean, `Triads`, savedir — clearing stale
-`modes/triad_idx_*.npy` from an earlier run into the same directory — size guard) →
+`Base.fit()` → `_initialize` (dims, `n_blocks`, weights, mean, `Triads`, savedir — clearing stale
+`modes/triad_idx_*.npy` from an earlier run into the same directory — size guard, then
+`_post_initialize`) →
 `_compute_qhat` → `_triad_loop` → `_store_and_save` (arrays first, `params_modes.yaml` last, so a
 YAML failure cannot lose results).
 
@@ -37,8 +43,8 @@ some triad actually references. With `max_freq_idx` set that is a small fraction
   the states along the flat axis with the state **slowest** (`flat = j*nx + p`, matching
   `cbmd.m`'s `repmat`), so a C-order reshape straight into `(*xshape, n_state)` scrambles every
   `n_state > 1` mode. `_unflatten_modes` is the single place a flat mode becomes a field —
-  `Cross` overrides it to unflatten as `(n_state, *xshape)` and move the state axis last —
-  and `tests/test_cbmd.py::test_two_identical_states_give_identical_mode_slices` guards it.
+  `Cross` overrides it to unflatten as `(n_state, *xshape)` and move the state axis last;
+  `tests/test_octave_reference.py`'s CBMD tiers compare the modes against `cbmd.m`.
   The other hazards are the weights and a user `mean`: both are therefore checked against the
   full `(*xshape, nv)` shape and a bare flat vector (or the reference's variable-first layout) is
   **rejected**.

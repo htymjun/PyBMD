@@ -1,13 +1,8 @@
 '''Module implementing I/O utils used across the library.'''
-import argparse
 import os
 from os.path import splitext
 
 import numpy as np
-import yaml
-
-
-REQUIRED_KEYS = ['time_step', 'n_space_dims', 'n_variables', 'n_dft']
 
 
 def read_data(data_file, format=None, comm=None):
@@ -100,37 +95,6 @@ def _as_array(obj):
     return np.asarray(obj)
 
 
-def read_config(parsed_file=None):
-    '''
-    Parse a YAML config file with ``required:`` and ``optional:`` sections,
-    each a list of single-key mappings.
-
-    :param str parsed_file: file to parse. Default is None, in which case the
-        path is read from the ``--config_file`` command-line argument.
-
-    :return: the parameters read from the config file.
-    :rtype: dict
-    '''
-    parser = argparse.ArgumentParser(description='Config file.')
-    parser.add_argument('--config_file', required=True,
-                        help='Configuration file.')
-    if parsed_file:
-        args = parser.parse_args(['--config_file', parsed_file])
-    else:
-        args = parser.parse_args()
-
-    with open(args.config_file) as file:
-        l = yaml.load(file, Loader=yaml.FullLoader)
-
-    params = _parse_yaml(l['required'])
-    found, missing = _check_keys(params, REQUIRED_KEYS)
-    if not found:
-        raise ValueError(f'config file is missing required keys: {missing}')
-    if 'optional' in l:
-        params = {**params, **_parse_yaml(l['optional'])}
-    return params
-
-
 def get_data_array(data_list, xdim, nv, dtype=np.float64):
     '''
     Assemble the input into a single array of shape ``(nt, *xshape, nv)``.
@@ -174,19 +138,10 @@ def get_data_array(data_list, xdim, nv, dtype=np.float64):
         raise ValueError(
             f'data has {data.shape[-1]} variables in its last axis but '
             f'n_variables is {nv}.')
+    if np.iscomplexobj(data):
+        # casting to float below would silently drop the imaginary part
+        raise TypeError(
+            'PyBMD expects real-valued data: the two-sided spectrum and the '
+            'sum/difference regions rely on the conjugate symmetry of a real '
+            'signal. Pass the real part explicitly if that is what you mean.')
     return np.ascontiguousarray(data, dtype=dtype)
-
-
-def _parse_yaml(l):
-    params = dict()
-    for d in l:
-        k = list(d.keys())[0]
-        params[k] = d[k]
-    return params
-
-
-def _check_keys(l, keys):
-    if isinstance(keys, str):
-        keys = [keys]
-    keys_not_found = [k for k in keys if k not in l.keys()]
-    return not keys_not_found, keys_not_found

@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 '''
-The "hypothesis testing" surrogate data of Schmidt (2020): travelling waves
-whose frequencies do or do not form a triad, with and without noise. Renders
-the figures in ``figures/hypothesis/`` for visual comparison with the paper.
+Example 4: the "hypothesis testing" surrogate data of Schmidt (2020, Figs. 4
+and 5): travelling waves whose frequencies do or do not form a triad, with
+and without noise. Renders the figures into ``example4_out/`` for visual
+comparison with the paper.
 
-    MPLBACKEND=Agg python examples/hypothesis_testing.py
+    MPLBACKEND=Agg python examples/example4_hypothesis_testing.py
 
 ``tests/test_hypothesis.py`` asserts the scientific content on the same data.
 '''
@@ -20,8 +21,6 @@ sys.path.append(os.path.join(CFD, '..'))
 
 from pybmd.bmd.standard import Standard
 import pybmd.utils.weights as utils_weights
-
-FIGURES_DIR = os.path.join(CFD, 'figures', 'hypothesis')
 
 # the paper's frequencies, moved to the nearest bins of n_dft=128
 NONRES = dict(name='nonres', freqs=(0.046875, 0.203125, 0.3515625)) # (0.05, 0.2, 0.35)
@@ -55,54 +54,59 @@ def surrogate_waves(freqs, nt=1280, nx=100, dt=1.0, seed=0, snr=None):
     return q[..., np.newaxis], x, k
 
 
-def fit_case(name, freqs, snr=None, save_dir='hypothesis_out',
-             store_modes=False):
+def fit_case(name, freqs, snr=None, save_dir='example4_out',
+             store_modes=False, **overrides):
     '''BMD of one surrogate case with the paper's settings: n_dft=128, no
-    overlap, Hann window, sum interactions only. Returns ``(bmd, x, k)``.'''
+    overlap, Hann window, sum interactions only; ``overrides`` go into
+    ``params``. Returns ``(bmd, x, k)``.'''
     q, x, k = surrogate_waves(freqs, seed=0, snr=snr)
     params = dict(
         n_dft=128, time_step=1.0, n_space_dims=1, n_variables=1, overlap=0,
         window='hann', regions=[1], solver='MengiOverton', save_modes=False,
         store_modes=store_modes, savedir=os.path.join(save_dir, name))
+    params.update(overrides)
     w = utils_weights.uniform((x.size,), n_vars=1, dV=x[1] - x[0])
     return Standard(params=params, weights=w).fit(q), x, k
 
 
-def amplitude_spectrum(q_x0, n_dft, dt, window='hann'):
+def _block_dft(q_x0, n_dft):
+    '''Hann-windowed DFT of the non-overlapping blocks of a single-point time
+    series, normalized like BMD's: ``(n_blocks, n_dft)``, column ``i`` being
+    integer frequency ``i`` (not fftshifted).'''
+    win = np.hanning(n_dft + 1)[:-1]
+    n_blocks = len(q_x0) // n_dft
+    blocks = (q_x0 - q_x0.mean())[:n_blocks * n_dft].reshape(n_blocks, n_dft)
+    return np.fft.fft(win * blocks, axis=1) / win.mean() / n_dft
+
+
+def amplitude_spectrum(q_x0, n_dft, dt):
     '''``A(f) = 2|mean_blocks q_hat(f)|``, computed independently of BMD with
     the same window and blocking, as the paper's panel (a) does.'''
-    win = np.hanning(n_dft + 1)[:-1]
-    win_weight = 1.0 / win.mean()
-    n_blocks = len(q_x0) // n_dft
-    q_c = q_x0 - q_x0.mean()
-    blocks = np.stack([q_c[i * n_dft:(i + 1) * n_dft] for i in range(n_blocks)])
-    q_hat = np.fft.fft(win[None, :] * blocks, axis=1) * win_weight / n_dft
-    freq = np.fft.fftfreq(n_dft, dt)
-    return freq, 2 * np.abs(q_hat).mean(axis=0)
+    q_hat = _block_dft(q_x0, n_dft)
+    return np.fft.fftfreq(n_dft, dt), 2 * np.abs(q_hat).mean(axis=0)
 
 
-def classical_bispectrum(q_x0, n_dft, dt, m, window='hann'):
+def classical_bispectrum(q_x0, n_dft, m):
     '''
-    Classical (biased) bispectrum estimator of a single-point time series,
-    block-averaged with the same window and blocking as BMD -- the quantity
-    the paper compares the mode bispectrum against in its noise test.
+    Classical (biased) bispectrum estimator of a single-point time series on
+    the integer-frequency grid ``0 <= j <= i < m``, block-averaged with the
+    same window and blocking as BMD -- the quantity the paper compares the
+    mode bispectrum against in its noise test.
     '''
-    win = np.hanning(n_dft + 1)[:-1]
-    win_weight = 1.0 / win.mean()
-    n_blocks = len(q_x0) // n_dft
-    q_c = q_x0 - q_x0.mean()
-    blocks = np.stack([q_c[i * n_dft:(i + 1) * n_dft] for i in range(n_blocks)])
-    q_hat = np.fft.fftshift(
-        np.fft.fft(win[None, :] * blocks, axis=1) * win_weight / n_dft, axes=1)
-    f_idx = np.rint(np.fft.fftshift(np.fft.fftfreq(n_dft, dt)) * n_dft).astype(int)
-    row = lambda k: int(np.searchsorted(f_idx, k))
+    q_hat = _block_dft(q_x0, n_dft)
     B = np.full((m, m), np.nan)
     for i in range(m):
         for j in range(i + 1):
             if i + j < n_dft // 2:
                 B[i, j] = np.abs(np.mean(
-                    q_hat[:, row(i)] * q_hat[:, row(j)] * np.conj(q_hat[:, row(i + j)])))
+                    q_hat[:, i] * q_hat[:, j] * np.conj(q_hat[:, i + j])))
     return B
+
+
+def _save(fig, path):
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    print(f'wrote {path}')
 
 
 def _surface(ax, t, vals, zmax, zlabel=r'$|\lambda_1|$'):
@@ -128,8 +132,8 @@ def _amplitude_panel(ax, q):
     ax.set_xlabel('$f$')
 
 
-def main(save_dir='hypothesis_out'):
-    os.makedirs(FIGURES_DIR, exist_ok=True)
+def main(save_dir='example4_out'):
+    os.makedirs(save_dir, exist_ok=True)
 
     # -- figure 1: 3 rows (nonres / triad / quartet) x 2 columns -------------
     titles = {
@@ -156,16 +160,13 @@ def main(save_dir='hypothesis_out'):
         _surface(fig.add_subplot(3, 2, 2 * row + 2, projection='3d'), t,
                  np.abs(bmd.L[t.f1_idx, t.f2_idx]), 0.05)
     fig.tight_layout()
-    out = os.path.join(FIGURES_DIR, 'hypothesis_harmonics_row.png')
-    fig.savefig(out, dpi=150)
-    plt.close(fig)
-    print(f'wrote {out}')
+    _save(fig, os.path.join(save_dir, 'hypothesis_harmonics_row.png'))
 
     # -- figure 2: unit-SNR noise; amplitude, classical and mode bispectra ---
     bmd, _, _ = fit_case(save_dir=save_dir, **NOISE)
     q, _, _ = surrogate_waves(NOISE['freqs'], seed=0, snr=NOISE['snr'])
     t = bmd.triads
-    B = classical_bispectrum(q[:, 0, 0], 128, 1.0, 64)
+    B = classical_bispectrum(q[:, 0, 0], 128, 64)
 
     fig = plt.figure(figsize=(15, 4.5))
     ax0 = fig.add_subplot(1, 3, 1)
@@ -184,10 +185,7 @@ def main(save_dir='hypothesis_out'):
     ax2.set_title('(c) mode bispectrum')
 
     fig.tight_layout()
-    out = os.path.join(FIGURES_DIR, 'hypothesis_noise.png')
-    fig.savefig(out, dpi=150)
-    plt.close(fig)
-    print(f'wrote {out}')
+    _save(fig, os.path.join(save_dir, 'hypothesis_noise.png'))
 
 
 if __name__ == '__main__':

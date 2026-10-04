@@ -3,7 +3,8 @@
 '''Validation against the "hypothesis testing" surrogate data of Schmidt (2020).
 
 The surrogate data and spectral estimators live in
-``examples/hypothesis_testing.py``, which also renders the reference figures.
+``examples/example4_hypothesis_testing.py``, which also renders the reference
+figures.
 '''
 import atexit
 import os
@@ -18,7 +19,7 @@ CF = os.path.realpath(__file__)
 CFD = os.path.dirname(CF)
 sys.path.append(os.path.join(CFD, '../'))
 
-from examples.hypothesis_testing import (
+from examples.example4_hypothesis_testing import (
     NONRES, TRIAD, QUARTET, NOISE, surrogate_waves, fit_case,
     amplitude_spectrum, classical_bispectrum)
 
@@ -117,7 +118,7 @@ def test_classical_bispectrum_matches_mode_bispectrum_without_noise():
     bmd, x, k = _case(**TRIAD)
     L_grid = _bispectrum_grid(bmd)
     q, _, _ = surrogate_waves(TRIAD['freqs'], seed=0)
-    B = classical_bispectrum(q[:, 0, 0], 128, 1.0, 40)
+    B = classical_bispectrum(q[:, 0, 0], 128, 40)
     assert (np.unravel_index(np.nanargmax(L_grid), L_grid.shape)
             == np.unravel_index(np.nanargmax(B), B.shape))
 

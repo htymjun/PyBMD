@@ -32,8 +32,22 @@ import pybmd.bmd.utils as utils_bmd
 import pybmd.utils.weights as utils_weights
 
 import octave_ref as oref
-# the paper's surrogate-data recipe, reused rather than duplicated
-from examples.hypothesis_testing import surrogate_waves, TRIAD
+# the paper's surrogate-data recipe and BMD settings, reused rather than
+# duplicated
+from examples.example4_hypothesis_testing import (surrogate_waves, fit_case,
+                                                  TRIAD)
+
+
+def _save(fig, name):
+    path = os.path.join(FIG_DIR, name)
+    fig.savefig(path, dpi=140)
+    plt.close(fig)
+    print(f'wrote {path}')
+
+
+def _rel(a, ref):
+    '''Element-wise relative deviation of ``a`` from ``ref``.'''
+    return np.abs(a - ref) / np.maximum(ref, 1e-300)
 
 
 def _check_prereqs():
@@ -86,10 +100,7 @@ def fig_bispectrum_comparison(bmd, L_ref):
     fig.suptitle('Mode bispectrum $\\log|\\lambda_1|$ -- cylinder wake, '
                  'regions={1,2}, max_freq_idx=12, 169 triads')
     fig.tight_layout()
-    path = os.path.join(FIG_DIR, 'bispectrum_comparison.png')
-    fig.savefig(path, dpi=140)
-    plt.close(fig)
-    print(f'wrote {path}')
+    _save(fig, 'bispectrum_comparison.png')
 
 
 def fig_deviation(bmd, L_ref):
@@ -97,7 +108,7 @@ def fig_deviation(bmd, L_ref):
     t = bmd.triads
     vals_py = np.abs(bmd.L[t.f1_idx, t.f2_idx])
     vals_ref = np.abs(L_ref[t.f1_idx, t.f2_idx])
-    rel = np.abs(vals_ref - vals_py) / np.maximum(vals_py, 1e-300)
+    rel = _rel(vals_ref, vals_py)
 
     fig, ax = plt.subplots(figsize=(7, 6.5))
     sc = ax.scatter(t.k, t.l, c=100 * rel, cmap='inferno_r', s=45,
@@ -115,10 +126,7 @@ def fig_deviation(bmd, L_ref):
     ax.legend(loc='upper right', frameon=True, fontsize=9)
     fig.colorbar(sc, ax=ax, label='relative deviation, %')
     fig.tight_layout()
-    path = os.path.join(FIG_DIR, 'deviation_heatmap.png')
-    fig.savefig(path, dpi=140)
-    plt.close(fig)
-    print(f'wrote {path}')
+    _save(fig, 'deviation_heatmap.png')
     return rel
 
 
@@ -164,7 +172,7 @@ def fig_three_way_solver_comparison(bmd, L_ref):
             (5, vals_ref, 'Reference deviation\nfrom PyBMD default, %'),
             (6, vals_compat, 'MengiOvertonMATLAB deviation\nfrom PyBMD default, %')):
         ax = fig.add_subplot(2, 3, ax_idx)
-        rel = np.abs(vals - vals_py) / np.maximum(vals_py, 1e-300)
+        rel = _rel(vals, vals_py)
         sc = ax.scatter(t.k, t.l, c=100 * rel, cmap='inferno_r', s=40,
                         vmin=0, vmax=max(1.0, float(100 * rel.max())),
                         edgecolors='none')
@@ -177,14 +185,11 @@ def fig_three_way_solver_comparison(bmd, L_ref):
     fig.suptitle('Three-way solver comparison -- cylinder wake, regions={1,2}, '
                 'max_freq_idx=12, 169 triads')
     fig.tight_layout()
-    path = os.path.join(FIG_DIR, 'three_way_solver_comparison.png')
-    fig.savefig(path, dpi=140)
-    plt.close(fig)
-    print(f'wrote {path}')
+    _save(fig, 'three_way_solver_comparison.png')
 
-    rel_ref = np.abs(vals_ref - vals_py) / np.maximum(vals_py, 1e-300)
-    rel_compat = np.abs(vals_compat - vals_py) / np.maximum(vals_py, 1e-300)
-    rel_compat_vs_ref = np.abs(vals_compat - vals_ref) / np.maximum(vals_ref, 1e-300)
+    rel_ref = _rel(vals_ref, vals_py)
+    rel_compat = _rel(vals_compat, vals_py)
+    rel_compat_vs_ref = _rel(vals_compat, vals_ref)
     print(f'  bmd.m               vs PyBMD default: max rel {rel_ref.max():.3e}; '
          f'>1%: {int((rel_ref > 0.01).sum())}/{len(rel_ref)}; '
          f'>10%: {int((rel_ref > 0.10).sum())}/{len(rel_ref)}')
@@ -194,31 +199,26 @@ def fig_three_way_solver_comparison(bmd, L_ref):
          f'>1%: {int((rel_compat_vs_ref > 0.01).sum())}/{len(rel_compat_vs_ref)}')
 
 
-def _hypothesis_run(freqs, snr, max_freq_idx=40, n_dft=128, seed=0):
+def _hypothesis_run(freqs, snr, max_freq_idx=40):
     '''
     PyBMD (three solvers) and the reference bmd.m (two solvers) on one
-    hypothesis-test surrogate case -- see examples/hypothesis_testing.py's
-    ``surrogate_waves`` for the recipe this reproduces exactly (n_dft=128,
+    hypothesis-test surrogate case, through example4's ``fit_case`` (n_dft=128,
     overlap=0, Hann window, regions=[1], 10 blocks).
 
     :return: ``(results, triads)``, where ``results`` maps
-        ``'pybmd_<solver>'`` to a fitted :class:`Standard` and
-        ``'bmd_<solver>'`` to the reference's raw ``L``.
+        ``'pybmd_<solver>'`` and ``'bmd_<solver>'`` to the respective ``L``.
     '''
-    q, x, k = surrogate_waves(freqs, seed=seed, snr=snr)
+    q, x, k = surrogate_waves(freqs, seed=0, snr=snr)
     w = utils_weights.uniform((x.size,), n_vars=1, dV=x[1] - x[0])
 
     results = {}
     for solver in ('MengiOverton', 'MengiOvertonMATLAB', 'simpleIteration'):
-        params = dict(n_dft=n_dft, time_step=1.0, n_space_dims=1, n_variables=1,
-                     overlap=0, window='hann', regions=[1],
-                     max_freq_idx=max_freq_idx, solver=solver, save_modes=False,
-                     savedir=os.path.join(FIG_DIR, f'_scratch_hyp_{solver}'))
-        bmd = Standard(params=params, weights=w).fit(q)
-        results[f'pybmd_{solver}'] = bmd
-        shutil.rmtree(params['savedir'], ignore_errors=True)
+        name = f'_scratch_hyp_{solver}'
+        bmd, _, _ = fit_case(name, freqs, snr=snr, save_dir=FIG_DIR,
+                             solver=solver, max_freq_idx=max_freq_idx)
+        results[f'pybmd_{solver}'] = bmd.L
+        shutil.rmtree(os.path.join(FIG_DIR, name), ignore_errors=True)
 
-    bmd = results['pybmd_MengiOverton']
     # bmd.m's HeWatson draws an unseeded random start vector (refs/bmd/bmd.m
     # has no seeding hook this driver can reach), so its numbers -- unlike
     # every other figure in this script -- vary run to run; that variability
@@ -250,7 +250,7 @@ def fig_hypothesis_pybmd_vs_matlab():
         results, t = _hypothesis_run(TRIAD['freqs'], snr)
         panels = [
             ('PyBMD MengiOverton',
-            np.abs(results['pybmd_MengiOverton'].L[t.f1_idx, t.f2_idx])),
+            np.abs(results['pybmd_MengiOverton'][t.f1_idx, t.f2_idx])),
             ('bmd.m MengiOverton',
             np.abs(results['bmd_MengiOverton'][t.f1_idx, t.f2_idx])),
             ('bmd.m HeWatson',
@@ -268,7 +268,7 @@ def fig_hypothesis_pybmd_vs_matlab():
             ax.set_title(f'{name} ({label})\npeak ({t.k[i]},{t.l[i]}) '
                         f'$|\\lambda_1|$={vals[i]:.5f}', fontsize=8)
 
-        py = np.abs(results['pybmd_MengiOverton'].L[t.f1_idx, t.f2_idx])
+        py = np.abs(results['pybmd_MengiOverton'][t.f1_idx, t.f2_idx])
         order = np.argsort(py)
         ax = fig.add_subplot(2, 4, row * 4 + 4)
         alternatives = [
@@ -278,9 +278,8 @@ def fig_hypothesis_pybmd_vs_matlab():
             ('PyBMD MengiOvertonMATLAB', 'pybmd_MengiOvertonMATLAB', 'tab:blue'),
         ]
         for name, key, color in alternatives:
-            vals = (np.abs(results[key].L[t.f1_idx, t.f2_idx]) if key.startswith('pybmd_')
-                   else np.abs(results[key][t.f1_idx, t.f2_idx]))
-            rel = np.abs(vals - py) / np.maximum(py, 1e-300)
+            vals = np.abs(results[key][t.f1_idx, t.f2_idx])
+            rel = _rel(vals, py)
             ax.semilogy(np.arange(len(py)), np.maximum(rel[order], 1e-16), '.',
                        ms=3, color=color, label=name)
             summary.append((label, name, float(rel.max()),
@@ -299,10 +298,7 @@ def fig_hypothesis_pybmd_vs_matlab():
     # a manual rect plus explicit spacing avoids the overlap tight_layout
     # alone leaves between them.
     fig.subplots_adjust(top=0.86, bottom=0.08, hspace=0.45, wspace=0.5)
-    path = os.path.join(FIG_DIR, 'hypothesis_pybmd_vs_matlab.png')
-    fig.savefig(path, dpi=140)
-    plt.close(fig)
-    print(f'wrote {path}')
+    _save(fig, 'hypothesis_pybmd_vs_matlab.png')
     for label, name, mx, n1, n in summary:
         print(f'  [{label}] {name:24s} vs PyBMD MengiOverton: '
              f'max rel {mx:.3e}; >1%: {n1}/{n}')
@@ -342,11 +338,8 @@ def fig_scale_equivariance():
     ax.set_aspect('equal')
     ax.legend(loc='upper left', frameon=True)
     fig.tight_layout()
-    path = os.path.join(FIG_DIR, 'scale_equivariance.png')
-    fig.savefig(path, dpi=140)
-    plt.close(fig)
-    print(f'wrote {path}')
-    rel = np.abs(b - a) / np.maximum(a, 1e-300)
+    _save(fig, 'scale_equivariance.png')
+    rel = _rel(b, a)
     print(f'  max rel deviation from equivariance: {rel.max():.3f}; '
          f'>1%: {int((rel > 0.01).sum())}/{rel.size}; '
          f'>10%: {int((rel > 0.10).sum())}/{rel.size}')

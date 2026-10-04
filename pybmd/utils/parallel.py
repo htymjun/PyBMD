@@ -60,56 +60,25 @@ def allreduce(data, comm):
     return reduced
 
 
-def allreduce_scalar(value, comm, op='sum'):
+def distribute_indices(n, comm):
     '''
-    Reduce a scalar across all ranks.
-
-    :param value: local value.
-    :param MPI.Comm comm: parallel communicator, or None.
-    :param str op: one of 'sum', 'min', 'max'. Default is 'sum'.
-
-    :return: the reduced value, identical on every rank.
-    '''
-    if comm is None:
-        return value
-    MPI = _get_module_MPI(comm)
-    ops = {'sum': MPI.SUM, 'min': MPI.MIN, 'max': MPI.MAX}
-    return comm.allreduce(value, op=ops[op])
-
-
-def _blockdist(n, size, rank):
-    '''Contiguous block distribution of ``n`` items; returns (count, start).'''
-    q, r = divmod(n, size)
-    count = q + (1 if r > rank else 0)
-    start = rank * q + min(rank, r)
-    return (count, start) if rank < size else (0, 0)
-
-
-def distribute_indices(n, comm, mode='round_robin'):
-    '''
-    Split ``range(n)`` across ranks.
+    Split ``range(n)`` across ranks, round-robin.
 
     :param int n: number of items, here the number of triads.
     :param MPI.Comm comm: parallel communicator, or None.
-    :param str mode: 'round_robin' (default) or 'block'.
 
     :return: the indices owned by this rank.
     :rtype: numpy.ndarray
 
     .. note::
 
-        The default is round-robin rather than contiguous blocks because the
-        cost of a triad varies systematically across the ``f1``-``f2`` plane:
-        the numerical-radius solve takes more iterations where the spectrum of
+        Round-robin rather than contiguous blocks because the cost of a triad
+        varies systematically across the ``f1``-``f2`` plane: the
+        numerical-radius solve takes more iterations where the spectrum of
         ``B`` is clustered, which happens in bands. A contiguous split would
         hand one rank an entire band; interleaving balances the load with an
         imbalance of at most one triad.
     '''
     if comm is None:
         return np.arange(n)
-    if mode == 'round_robin':
-        return np.arange(comm.rank, n, comm.size)
-    if mode == 'block':
-        count, start = _blockdist(n, comm.size, comm.rank)
-        return np.arange(start, start + count)
-    raise ValueError(f"mode must be 'round_robin' or 'block'; got {mode!r}.")
+    return np.arange(comm.rank, n, comm.size)

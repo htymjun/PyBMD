@@ -71,7 +71,6 @@ def _small_bmd(small_data, tmp_path, **overrides):
     w = utils_weights.uniform((small_data['n1'], small_data['n2']), 1, 1.0)
     bmd = Standard(params=params, weights=w)
     bmd._initialize(x)
-    bmd._mode_shape = (*bmd._xshape, bmd._nv)   # normally set by fit()
     return bmd, x, w
 
 
@@ -179,7 +178,7 @@ def test_tier_a_qhat_and_b_match(small_data, tmp_path, weight_kind):
 
     out = _octave_bmd(bmd, x, w, instrumented=True)
     q_hat_ref, b_all_ref = out['Q_hat'], out['B_all']
-    q_hat = bmd._compute_qhat(block_shape=(bmd._nxv,))
+    q_hat = bmd._compute_qhat()
 
     for f in t.freq_needed:
         f = int(f)
@@ -345,7 +344,7 @@ def test_tier_b_modes_and_energy_transfer_agree(small_data, tmp_path):
     out = _octave_bmd(bmd, x, w)
     L_ref, T_ref, P_ref = out['L'], out['T'], out['P']
 
-    q_hat = bmd._compute_qhat(block_shape=(bmd._nxv,))
+    q_hat = bmd._compute_qhat()
     bmd._triad_loop(q_hat)
 
     vals_py = np.abs(bmd.L[t.f1_idx, t.f2_idx])
@@ -378,8 +377,6 @@ def _small_cbmd(small_data, tmp_path, x3, **overrides):
     params.update(overrides)
     cb = Cross(params=params)
     cb._initialize(x3)
-    cb._mode_shape = (*cb._xshape, cb.n_state)   # normally set by fit()
-    cb._weights_tiled = np.tile(cb._weights, (cb.n_state, 1))
     return cb
 
 
@@ -404,7 +401,7 @@ def test_cbmd_tier_a_matches_reference(small_data, tmp_path, case):
     cb = _small_cbmd(small_data, tmp_path, x3)
     out = _octave_cbmd(cb, x3, instrumented=True)
     b_all_ref = out['B_all']
-    q_hat = cb._compute_qhat(block_shape=(cb._nx, cb._nv))
+    q_hat = cb._compute_qhat()
 
     max_rel = 0.0
     for i in range(cb.n_triads):

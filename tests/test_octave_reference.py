@@ -163,9 +163,11 @@ def test_tier_a_qhat_and_b_match(small_data, tmp_path, weight_kind):
     if weight_kind == 'uniform':
         w = utils_weights.uniform((small_data['n1'], small_data['n2']), 1, 1.0)
     else:
+        # the data is passed to bmd.m and PyBMD untransposed, (n1, n2), so
+        # the coordinate along the last axis goes first
         x1 = np.linspace(0, 1, small_data['n1'])
         x2 = np.linspace(0, 2, small_data['n2'])
-        w = utils_weights.trapz_2d(x1, x2, n_vars=1)
+        w = utils_weights.trapz_2d(x2, x1, n_vars=1)
 
     x = small_data['u'][..., np.newaxis]
     params = dict(n_dft=64, time_step=small_data['dt'], n_space_dims=2,

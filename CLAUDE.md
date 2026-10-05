@@ -14,7 +14,7 @@ pip install -e '.[mpi,io,test]'      # editable install; extras: mpi, io (.mat/.
 git submodule update --init          # populate refs/bmd (the MATLAB reference), only needed
                                      # for tests/test_octave_reference.py -- see tests/CLAUDE.md
 
-pytest                                # full suite, 92 tests: 11 `slow` (Octave
+pytest                                # full suite, 97 tests: 11 `slow` (Octave
                                       # cross-validation), 1 `mpi`
 pytest -m "not slow and not mpi"      # fast subset, ~30 s
 pytest tests/optimizers -q            # one directory (numerical-radius solver tests,

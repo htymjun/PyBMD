@@ -226,10 +226,10 @@ def plot_energy_transfer(T, freq, **kwargs):
     return plot_mode_bispectrum(np.asarray(T), freq, **kwargs)
 
 
-def plot_triad_modes(modes, k, l, x1=None, x2=None, vars_idx=(0,),
+def plot_triad_modes(modes, k, l, x=None, y=None, vars_idx=(0,),
                      cmap='RdBu_r', cmap_prod='bone_r', figsize=None,
                      facecolor=None, xlim=None, ylim=None,
-                     xlabel=r'$x_1$', ylabel=r'$x_2$',
+                     xlabel=r'$x$', ylabel=r'$y$',
                      tight_layout=True, extend='both', extendrect=True,
                      path=None, filename=None):
     '''
@@ -244,12 +244,14 @@ def plot_triad_modes(modes, k, l, x1=None, x2=None, vars_idx=(0,),
     Columns are variables.
 
     :param numpy.ndarray modes: modes of one triad, of shape
-        ``(2, n1, n2, nv)`` or ``(4, n1, n2, nv)``, as returned by
+        ``(2, ny, nx, nv)`` or ``(4, ny, nx, nv)``, as returned by
         ``get_modes_at_triad``.
     :param int k: integer frequency index of f1, used for the title.
     :param int l: integer frequency index of f2, used for the title.
-    :param numpy.ndarray x1: first coordinate. Default is the index.
-    :param numpy.ndarray x2: second coordinate. Default is the index.
+    :param numpy.ndarray x: x coordinate, 1-D of length ``nx`` or 2-D
+        ``(ny, nx)``. Default is the index.
+    :param numpy.ndarray y: y coordinate, 1-D of length ``ny`` or 2-D
+        ``(ny, nx)``. Default is the index.
     :param vars_idx: variables to plot.
     :param facecolor: background color for the figure and axes. Default is
         None, leaving Matplotlib's default unchanged.
@@ -257,8 +259,8 @@ def plot_triad_modes(modes, k, l, x1=None, x2=None, vars_idx=(0,),
         ``(10, 15)`` for four.
     :param xlim: x-axis limits. Default is Matplotlib's auto limits.
     :param ylim: y-axis limits. Default is Matplotlib's auto limits.
-    :param str xlabel: x-axis label. Default is ``'$x_1$'``.
-    :param str ylabel: y-axis label. Default is ``'$x_2$'``.
+    :param str xlabel: x-axis label. Default is ``'$x$'``.
+    :param str ylabel: y-axis label. Default is ``'$y$'``.
     :param bool tight_layout: call ``fig.tight_layout()``. Default is True.
     :param str extend: contour extension mode. Default is ``'both'`` so values
         outside explicit contour levels are still colored.
@@ -272,17 +274,17 @@ def plot_triad_modes(modes, k, l, x1=None, x2=None, vars_idx=(0,),
 
     if modes.ndim != 4 or modes.shape[0] not in (2, 4):
         raise ValueError(
-            f'plot_triad_modes needs modes of shape (2, n1, n2, nv) or '
-            f'(4, n1, n2, nv); got {modes.shape}. Only two-dimensional data '
+            f'plot_triad_modes needs modes of shape (2, ny, nx, nv) or '
+            f'(4, ny, nx, nv); got {modes.shape}. Only two-dimensional data '
             f'can be contoured.')
     has_constituents = modes.shape[0] == 4
     if figsize is None:
         figsize = (10, 15) if has_constituents else (10, 9)
     vars_idx = list(vars_idx)
-    if x1 is None:
-        x1 = np.arange(modes.shape[1])
-    if x2 is None:
-        x2 = np.arange(modes.shape[2])
+    if x is None:
+        x = np.arange(modes.shape[2])
+    if y is None:
+        y = np.arange(modes.shape[1])
 
     # rows, keyed into `modes` by name rather than position, so inserting the
     # constituent rows ahead of the interaction map can't silently mis-scale
@@ -312,7 +314,7 @@ def plot_triad_modes(modes, k, l, x1=None, x2=None, vars_idx=(0,),
             else:
                 m = np.max(np.abs(field)) or 1.0
                 lv, cm = m * np.linspace(0, 1, 257), cmap_prod
-            im = ax.contourf(x1, x2, field.T, levels=lv, cmap=cm,
+            im = ax.contourf(x, y, field, levels=lv, cmap=cm,
                              extend=extend)
             ax.set_xlabel(xlabel)
             ax.set_ylabel(ylabel)

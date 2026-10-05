@@ -50,6 +50,8 @@ PyBMD のどのコードに対応するかという観点で整理した文書�
 ### 1.1 データの形
 
 データは常に `(nt, *xshape, n_variables)`、つまり **時間が先頭、変数が末尾** です。
+空間軸は NumPy/matplotlib の画像と同じ並びで、2 次元なら `xshape = (ny, nx)`、3 次元なら `(nz, ny, nx)`（x が最後の空間軸）です。
+MATLAB や Fortran の配列は `(nx, ny)` で保存されているので、転置してから渡します（例: `u.transpose(0, 2, 1)`）。
 内部では各スナップショットを C order で長さ $n = n_x n_v$ のベクトルに平坦化します
 （[base.py:555](../pybmd/bmd/base.py#L555) の `reshape(self._n_dft, -1)`）。
 
@@ -73,7 +75,7 @@ $$
 $$
 と定義します。$w_j$ は通常、求積（台形則など）の体積要素です。
 
-- 生成: [pybmd/utils/weights.py](../pybmd/utils/weights.py) の `uniform`, `trapz_2d`, `trapz_3d`
+- 生成: [pybmd/utils/weights.py](../pybmd/utils/weights.py) の `uniform`, `trapz_2d`, `trapz_3d`, `curvilinear_2d`（曲線格子）
 - 形状チェック: [base.py:496](../pybmd/bmd/base.py#L496)。平坦ベクトルは受け付けません（並び順の曖昧さでモードが壊れるのを防ぐため）
 - 平坦化: [base.py:424](../pybmd/bmd/base.py#L424)（データと同じ C order）
 
@@ -484,7 +486,7 @@ params = dict(n_dft=64,            # N_fft
               overlap=50,          # N_ovlp = 32
               regions=[1, 2],      # 和と差の相互作用
               max_freq_idx=12)     # |k|,|l| ≤ 12
-bmd = Standard(params, weights=W.trapz_2d(x, y, n_vars=1)).fit(data)  # data: (nt, nx, ny, 1)
+bmd = Standard(params, weights=W.trapz_2d(x, y, n_vars=1)).fit(data)  # data: (nt, ny, nx, 1)
 
 i   = bmd.find_triad(12, 12)        # トライアド (12, 12, 24)
 lam = bmd.L[bmd.triads.f1_idx[i], bmd.triads.f2_idx[i]]   # λ_1（複素数）

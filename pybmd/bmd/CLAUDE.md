@@ -123,6 +123,13 @@ but errors with `'Unknown solver.'`), which `tests/test_octave_reference.py` sti
   1-based index copied from MATLAB.
 - Data is always `(nt, *xshape, n_variables)` — variables **last**, for both classes. MATLAB's
   `cbmd.m` puts them second; PyBMD does not.
+- Spatial axes follow NumPy/matplotlib: `xshape = (ny, nx)` in 2-D, `(nz, ny, nx)` in 3-D, x
+  **last**. `trapz_2d(x, y)`/`trapz_3d(x, y, z)` return that shape and `plot_triad_modes` contours
+  `field` untransposed. MATLAB/Fortran arrays are `(nx, ny)` and must be transposed by the caller
+  (`examples/data.py` and `example5` do). The decomposition itself never uses the meaning of an
+  axis — only the plots and the weight constructors do — so `L` and the modes are unchanged by the
+  convention. `tests/test_octave_reference.py` passes the *untransposed* fixture to both `bmd.m`
+  and PyBMD, which is why its `trapz_2d` call takes the last-axis coordinate first.
 - BMD always needs the full two-sided spectrum (difference-interactions use negative
   frequencies), so there is no `rfft` path and no `fullspectrum` option.
 - `Triads.find(k, l)` is the supported way to reach a triad.

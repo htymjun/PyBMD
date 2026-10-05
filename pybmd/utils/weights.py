@@ -12,6 +12,10 @@ Every constructor returns the dict ``{'weights_name': str, 'weights': ndarray}``
     - :class:`pybmd.bmd.cross.Cross` expects ``xshape`` -- a purely spatial
       weight, which is tiled internally over the state variables.
 
+    Spatial axes follow the NumPy/matplotlib image convention, ``(ny, nx)``
+    in 2-D and ``(nz, ny, nx)`` in 3-D: x is the *last* spatial axis. Arrays
+    from MATLAB or Fortran, stored ``(nx, ny)``, must be transposed first.
+
     The weight is flattened in the same C order as the data. Supplying a
     weight built in Fortran order attaches each weight to the wrong grid point,
     which silently corrupts the modes without raising, so the classes reject a
@@ -47,37 +51,72 @@ def _cell_widths(coord):
     return np.abs(d)
 
 
-def trapz_2d(x1, x2, n_vars=1):
+def trapz_2d(x, y, n_vars=1):
     '''
     2-D integration weights on a possibly non-uniform orthogonal grid.
 
-    :param numpy.ndarray x1: first spatial coordinate, 1-D.
-    :param numpy.ndarray x2: second spatial coordinate, 1-D.
+    :param numpy.ndarray x: x coordinate, 1-D, of length ``nx``.
+    :param numpy.ndarray y: y coordinate, 1-D, of length ``ny``.
     :param int n_vars: number of variables. Default is 1.
 
-    :return: the weights, of shape ``(len(x1), len(x2), n_vars)``.
+    :return: the weights, of shape ``(ny, nx, n_vars)``.
     :rtype: dict
     '''
-    dA = np.einsum('i,j->ij', _cell_widths(x1), _cell_widths(x2))
+    dA = np.outer(_cell_widths(y), _cell_widths(x))
     if n_vars:
         dA = np.repeat(dA[..., np.newaxis], n_vars, axis=-1)
     return {'weights_name': 'trapz_2d', 'weights': dA}
 
 
-def trapz_3d(x1, x2, x3, n_vars=1):
+def curvilinear_2d(x, y, n_vars=1):
+    '''
+    2-D integration weights on a structured curvilinear grid.
+
+    The cell area is the Jacobian of the map from the index space
+    ``(xi, eta)`` to ``(x, y)``, ``|x_xi y_eta - x_eta y_xi|``, with
+    second-order differences (one-sided at the edges), times the trapezoidal
+    weights of the index space (1/2 on the edges). On a rectilinear grid this
+    reduces exactly to :func:`trapz_2d`.
+
+    :param numpy.ndarray x: x coordinate of every grid point, ``(ny, nx)``.
+    :param numpy.ndarray y: y coordinate of every grid point, ``(ny, nx)``.
+    :param int n_vars: number of variables. Default is 1.
+
+    :return: the weights, of shape ``(ny, nx, n_vars)``.
+    :rtype: dict
+    '''
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    if x.ndim != 2 or x.shape != y.shape or min(x.shape) < 2:
+        raise ValueError(
+            f'x and y must be 2-D arrays of the same shape, at least 2 points '
+            f'in each direction; got {x.shape} and {y.shape}.')
+    x_xi, x_eta = np.gradient(x)
+    y_xi, y_eta = np.gradient(y)
+    jac = np.abs(x_xi * y_eta - x_eta * y_xi)
+    w_xi, w_eta = np.ones(x.shape[0]), np.ones(x.shape[1])
+    w_xi[[0, -1]] = 0.5
+    w_eta[[0, -1]] = 0.5
+    dA = jac * np.outer(w_xi, w_eta)
+    if n_vars:
+        dA = np.repeat(dA[..., np.newaxis], n_vars, axis=-1)
+    return {'weights_name': 'curvilinear_2d', 'weights': dA}
+
+
+def trapz_3d(x, y, z, n_vars=1):
     '''
     3-D integration weights on a possibly non-uniform orthogonal grid.
 
-    :param numpy.ndarray x1: first spatial coordinate, 1-D.
-    :param numpy.ndarray x2: second spatial coordinate, 1-D.
-    :param numpy.ndarray x3: third spatial coordinate, 1-D.
+    :param numpy.ndarray x: x coordinate, 1-D, of length ``nx``.
+    :param numpy.ndarray y: y coordinate, 1-D, of length ``ny``.
+    :param numpy.ndarray z: z coordinate, 1-D, of length ``nz``.
     :param int n_vars: number of variables. Default is 1.
 
-    :return: the weights, of shape ``(len(x1), len(x2), len(x3), n_vars)``.
+    :return: the weights, of shape ``(nz, ny, nx, n_vars)``.
     :rtype: dict
     '''
-    dV = np.einsum('i,j,k->ijk', _cell_widths(x1), _cell_widths(x2),
-                   _cell_widths(x3))
+    dV = np.einsum('k,j,i->kji', _cell_widths(z), _cell_widths(y),
+                   _cell_widths(x))
     if n_vars:
         dV = np.repeat(dV[..., np.newaxis], n_vars, axis=-1)
     return {'weights_name': 'trapz_3d', 'weights': dV}

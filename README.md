@@ -44,8 +44,10 @@ import numpy as np
 from pybmd.bmd.standard import Standard
 import pybmd.utils.weights as utils_weights
 
-# data has time first and the variable index last: (nt, *spatial, n_variables)
-data = ...
+# data has time first and the variable index last: (nt, *spatial, n_variables).
+# Spatial axes follow NumPy/matplotlib: (ny, nx) in 2-D, (nz, ny, nx) in 3-D.
+# MATLAB/Fortran arrays are (nx, ny): transpose them first, e.g. u.transpose(0, 2, 1).
+data = ...   # (nt, ny, nx, 2)
 
 params = dict(
     n_dft=256,               # snapshots per block
@@ -58,7 +60,7 @@ params = dict(
     solver='MengiOverton',
     savedir='bmd_results',
 )
-weights = utils_weights.trapz_2d(x, y, n_vars=2)
+weights = utils_weights.trapz_2d(x, y, n_vars=2)   # x: (nx,), y: (ny,)
 bmd = Standard(params=params, weights=weights).fit(data)
 
 # the mode bispectrum, NaN outside the computed triads
@@ -78,7 +80,7 @@ Plotting:
 ```python
 from pybmd.bmd.postproc import plot_mode_bispectrum, plot_triad_modes
 plot_mode_bispectrum(bmd.L, bmd.freq)
-plot_triad_modes(bmd.get_modes_at_triad(i), k=5, l=-2, x1=x[:, 0], x2=y[0, :])
+plot_triad_modes(bmd.get_modes_at_triad(i), k=5, l=-2, x=x, y=y)
 ```
 
 Post-processing takes a fitted `Standard`/`Cross`, not a path. To revisit a result later, pickle
@@ -97,7 +99,7 @@ with open('bmd.pkl', 'rb') as f:
 top = top_triads(bmd, n=5)
 plot_mode_bispectrum(bmd.L, bmd.freq)
 plot_triad_modes(bmd.get_modes_at_triad(int(top[0]['triad_idx'])),
-                 int(top[0]['k']), int(top[0]['l']), x1=x[:, 0], x2=y[0, :])
+                 int(top[0]['k']), int(top[0]['l']), x=x, y=y)
 ```
 
 Running in parallel — the triad loop is distributed across ranks and results are identical to a

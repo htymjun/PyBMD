@@ -23,6 +23,8 @@ Four layers, from solver to paper:
   `tests/octave/octave_ref.py` is the harness, `tests/octave/build_report.py` regenerates the
   figures of [`octave/octave_cross_validation.md`](octave/octave_cross_validation.md).
 - `test_io_rejects_complex.py`: complex data is refused rather than cast to its real part.
+- `test_weights.py`: `curvilinear_2d` reduces to `trapz_2d` on a rectilinear grid, is rotation
+  invariant, and integrates a polar annulus.
 
 `tests/conftest.py` puts the checkout first on `sys.path`, so a non-editable install cannot
 shadow the source.

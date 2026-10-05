@@ -15,13 +15,18 @@ def load_cylinder_wake(path=DEFAULT_PATH):
     '''
     Load the cylinder wake at Re=500.
 
+    The file keeps the MATLAB layout, ``(nx, ny)``; it is transposed here to
+    PyBMD's ``(ny, nx)``.
+
     :param str path: ``.npz`` file holding ``x``, ``y``, ``u``, ``v`` and
         ``dt``. Default is the subsampled fixture in ``tests/data``.
 
-    :return: ``x``, ``y``, ``u``, ``v``, ``dt``.
+    :return: ``x``, ``y`` of shape ``(ny, nx)``, ``u``, ``v`` of shape
+        ``(nt, ny, nx)``, and ``dt``.
     :rtype: tuple
     '''
     with np.load(path) as d:
-        return (d['x'].astype(np.float64), d['y'].astype(np.float64),
-                d['u'].astype(np.float64), d['v'].astype(np.float64),
+        return (d['x'].T.astype(np.float64), d['y'].T.astype(np.float64),
+                d['u'].transpose(0, 2, 1).astype(np.float64),
+                d['v'].transpose(0, 2, 1).astype(np.float64),
                 float(d['dt']))

@@ -27,7 +27,7 @@ from examples.data import load_cylinder_wake
 
 def main(save_dir='example3_out'):
     x, y, u, v, dt = load_cylinder_wake()
-    nt, n1, n2 = u.shape
+    nt, ny, nx = u.shape
 
     ## q, r and s all set to the streamwise velocity
     data = np.stack([u, u, u], axis=-1)
@@ -38,14 +38,14 @@ def main(save_dir='example3_out'):
     cbmd = Cross(
         params=dict(common, n_variables=3, state_idx=[0], qr_idx=[[1, 2]],
                     savedir=os.path.join(save_dir, 'cbmd')),
-        weights=utils_weights.trapz_2d(x[:, 0], y[0, :], n_vars=None),
+        weights=utils_weights.trapz_2d(x[0, :], y[:, 0], n_vars=None),
     ).fit(data)
 
     ## the same computation through the standard BMD, for comparison
     bmd = Standard(
         params=dict(common, n_variables=1,
                     savedir=os.path.join(save_dir, 'bmd')),
-        weights=utils_weights.trapz_2d(x[:, 0], y[0, :], n_vars=1),
+        weights=utils_weights.trapz_2d(x[0, :], y[:, 0], n_vars=1),
     ).fit(u[..., np.newaxis])
 
     diff = np.nanmax(np.abs(cbmd.L - bmd.L))

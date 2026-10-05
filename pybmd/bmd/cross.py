@@ -36,19 +36,13 @@ class Cross(Base):
 
     _label = 'CBMD'
 
-    def __init__(self, params, weights=None, comm=None, mean=None):
-        super().__init__(params, weights=weights, comm=comm, mean=mean)
+    def __init__(self, params, weights=None, comm=None):
+        super().__init__(params, weights=weights, comm=comm)
         self._state_idx = np.atleast_1d(
             np.asarray(params.get('state_idx', [0]), dtype=int))
         self._qr_idx = np.atleast_2d(
             np.asarray(params.get('qr_idx', [[1, 2]]), dtype=int))
         self._validate_var_idx()
-        if self._normalize_weights:
-            raise ValueError(
-                'normalize_weights is not supported by Cross: CBMD weights are '
-                'purely spatial and have no variable axis to normalize '
-                'variable-wise (the reference cbmd.m has no such option '
-                'either). Use normalize_data, or pass pre-scaled weights.')
         if self._constituent_modes:
             raise ValueError(
                 'constituent_modes is not supported by Cross: the quadratic '

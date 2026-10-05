@@ -132,18 +132,14 @@ and `example5_cylinder_paper.py` (cylinder-wake mode bispectrum and modes, Figs.
 | --- | --- | --- |
 | `overlap` | `50` | block overlap, in **percent** |
 | `n_overlap` | — | block overlap in snapshots; takes precedence over `overlap` |
-| `window` | `'hamming'` | `'hamming'`, `'hann'`, `'boxcar'`, or an array |
-| `mean_type` | `'longtime'` | `'longtime'`, `'blockwise'`, `'zero'` (alias `'none'`) |
+| `window` | `'hamming'` | `'hamming'` or `'hann'` |
 | `regions` | `[1, 2]` | regions of the bispectrum to compute, in 1..8 |
 | `max_freq_idx` | `None` | bound on `\|k\|` and `\|l\|`; default is Nyquist |
 | `tol` | `1e-6` | Mengi–Overton solver tolerance |
 | `n_it_max` | `500` | Mengi–Overton iteration cap |
 | `dtype` | `'double'` | `'double'` or `'single'` |
-| `normalize_weights` | `False` | divide each variable's weight by that variable's variance (`Standard` only) |
-| `normalize_data` | `False` | standardize each point and variable within a block by its standard deviation |
 | `save_modes` | `True` | write `modes/triad_idx_{i:08d}.npy` |
 | `store_modes` | `False` | also keep all modes in memory, exposed as `.modes` |
-| `max_modes_gb` | `8.0` | refuse to write more than this without an explicit raise |
 | `compute_energy_transfer` | `True` | fill the energy-transfer term `T` |
 | `savedir` | `'bmd_results'` | results directory |
 

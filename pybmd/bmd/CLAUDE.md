@@ -45,9 +45,8 @@ some triad actually references. With `max_freq_idx` set that is a small fraction
   `n_state > 1` mode. `_unflatten_modes` is the single place a flat mode becomes a field —
   `Cross` overrides it to unflatten as `(n_state, *xshape)` and move the state axis last;
   `tests/test_octave_reference.py`'s CBMD tiers compare the modes against `cbmd.m`.
-  The other hazards are the weights and a user `mean`: both are therefore checked against the
-  full `(*xshape, nv)` shape and a bare flat vector (or the reference's variable-first layout) is
-  **rejected**.
+  The other hazard is the weights: they are therefore checked against the full `(*xshape, nv)`
+  shape and a bare flat vector (or the reference's variable-first layout) is **rejected**.
 - **The reduction accumulates into zeros, not NaN.** `NaN + SUM` poisons every rank. The reference's
   NaN-outside-the-triads semantics is restored *after* the `allreduce`, via `triads.mask`.
 - **Determinism is a requirement, not a nicety.** `tests/test_bmd_mpi.py` asserts bit-identical
@@ -59,13 +58,9 @@ some triad actually references. With `max_freq_idx` set that is a small fraction
 - **`coeffs.npy` is the durable artifact.** Modes are just `Q @ a`, so a large case can run with
   `save_modes=False` and have any triad reconstructed later — by recomputing the DFT rows of that
   triad and applying `a`; there is no helper for this yet.
-- **`normalize_weights` is variable-wise and therefore `Standard`-only**: CBMD weights have no
-  variable axis, so `Cross` rejects it at construction (the reference has no such option).
-  `apply_normalization` returns a *copy* — the caller's weights dict must survive a `fit()`.
-  `normalize_data` standardizes each point and variable within a block by its standard deviation.
 - **`store_modes` costs as much as `save_modes`, on every rank** (the full `(n_triads, n_comp,
   *mode_shape)` array plus its `allreduce` buffer, `n_comp` being 2 or 4 with
-  `constituent_modes`); the `max_modes_gb` guard covers both.
+  `constituent_modes`); the `MAX_MODES_GB` (8 GB) guard in `base.py` covers both.
 - **`constituent_modes` is a PyBMD addition, not a reference feature.** `bmd.m` allocates
   `P = zeros(2,nTriads,nx)` and never forms a mode from `Q_hat_f1*a` or `Q_hat_f2*a` alone — only
   their product feeds `B` and `psi_prod`. Setting `params['constituent_modes'] = True` appends

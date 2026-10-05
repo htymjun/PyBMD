@@ -10,7 +10,7 @@ when working there — [`pybmd/bmd/CLAUDE.md`](pybmd/bmd/CLAUDE.md) for the BMD/
 ## Commands
 
 ```bash
-pip install -e '.[mpi,io,test]'      # editable install; extras: mpi, io (.mat/.nc), test, docs
+pip install -e '.[mpi,io,test]'      # editable install; extras: mpi, io (.mat), test, docs
 git submodule update --init          # populate refs/bmd (the MATLAB reference), only needed
                                      # for tests/test_octave_reference.py -- see tests/CLAUDE.md
 

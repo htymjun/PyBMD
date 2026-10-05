@@ -12,7 +12,7 @@ PyBMD のどのコードに対応するかという観点で整理した文書�
 
 | 理論のステップ | 数式（概略） | 実装 |
 | --- | --- | --- |
-| 1. 変動成分をとる | $q' = q - \bar q$ | [base.py:513](../pybmd/bmd/base.py#L513) `select_mean`, [base.py:566](../pybmd/bmd/base.py#L566) |
+| 1. 変動成分をとる | $q' = q - \bar q$ | [base.py:514](../pybmd/bmd/base.py#L514) `long_t_mean`, [base.py:535](../pybmd/bmd/base.py#L535) |
 | 2. ブロック分割（Welch 法） | $N_\mathrm{blk}$ 個の実現 $q^{[i]}$ | [base.py:399-406](../pybmd/bmd/base.py#L399-L406), [base.py:550](../pybmd/bmd/base.py#L550) `_get_block` |
 | 3. 窓掛け＋時間 DFT | $\hat q^{[i]}_k$ | [base.py:557](../pybmd/bmd/base.py#L557) `_compute_blocks` |
 | 4. トライアド $(k,l,k+l)$ の列挙 | $f_k+f_l=f_{k+l}$ | [utils.py:299](../pybmd/bmd/utils.py#L299) `triad_indices` |
@@ -57,15 +57,8 @@ MATLAB や Fortran の配列は `(nx, ny)` で保存されているので、転�
 
 ### 1.2 平均の除去
 
-BMD は変動成分 $q'(\mathbf x,t)=q(\mathbf x,t)-\bar q(\mathbf x)$ の相関を見る手法です。`mean_type` で選びます
-（[base.py:513-543](../pybmd/bmd/base.py#L513-L543)）。
-
-| `mean_type` | 引く量 | 備考 |
-| --- | --- | --- |
-| `'longtime'`（既定） | 全時間平均 $\bar q$ | MATLAB 版の既定と同じ |
-| `'blockwise'` | 各ブロックの時間平均 | [base.py:568](../pybmd/bmd/base.py#L568) |
-| `'zero'`, `'none'` | 何も引かない | 警告が出る |
-| 引数 `mean=` | ユーザ指定の平均 | 形状 `(*xshape, nv)` 必須 |
+BMD は変動成分 $q'(\mathbf x,t)=q(\mathbf x,t)-\bar q(\mathbf x)$ の相関を見る手法です。
+全時間平均 $\bar q$（MATLAB 版の既定と同じ）を各ブロックから引きます（[base.py:514](../pybmd/bmd/base.py#L514) `long_t_mean`）。
 
 ### 1.3 空間内積の重み $\mathbf W$
 
@@ -112,7 +105,7 @@ $$
 - $1/\bar w$ は窓による振幅低下の補正です（`win_weight`、[base.py:428](../pybmd/bmd/base.py#L428)）。
   この規格化により、周波数 $f_k$ で振幅 $A$ の正弦波（窓がその周波数に合っている場合）は $|\hat q_k| = A/2$ になります。
 - DFT と `fftshift`: [base.py:581-582](../pybmd/bmd/base.py#L581-L582)
-- 窓: `'hamming'`（既定）/`'hann'`/`'boxcar'`/任意の配列（[utils.py:76](../pybmd/bmd/utils.py#L76)）
+- 窓: `'hamming'`（既定）/`'hann'`（[utils.py:61](../pybmd/bmd/utils.py#L61)）
 
 **両側スペクトルが必須です。** 差の相互作用（$l<0$）は負の周波数を使うので、`rfft` は使いません。
 
@@ -396,7 +389,7 @@ $$
 - **重み $\mathbf W$ を含みません。** MATLAB 版と同じで、意図的です。
 - したがって一様重み（$\mathbf W=\mathbf I$）なら $T = \mathrm{Re}\,\lambda_1$ です（数値的に確認済み）。
   重みがある場合は $\mathbf B$ から $\mathbf W$ を除いた Rayleigh 商の実部になります。
-- 符号付きの量で、$f_{k+l}$ への（正）/からの（負）正味のエネルギー輸送を表します。図は `plot_energy_transfer`。
+- 符号付きの量で、$f_{k+l}$ への（正）/からの（負）正味のエネルギー輸送を表します。正負があるため bispectrum の図（`plot_mode_bispectrum`, $|\cdot|$ を描く）は使えません。
 
 ### 6.4 展開係数 $\mathbf a_1$
 
@@ -454,7 +447,7 @@ $$
 | モードの形 `(*xshape, n_state)` | [cross.py:99](../pybmd/bmd/cross.py#L99) `_unflatten_modes` |
 
 平坦軸は**状態が最も遅い添字**（`flat = j*nx + p`）です。そのため `_unflatten_modes` は `(n_state, *xshape)` に戻してから状態軸を末尾へ移します。
-CBMD では `normalize_weights` と `constituent_modes` は使えません。
+CBMD では `constituent_modes` は使えません。
 
 ---
 
@@ -463,14 +456,8 @@ CBMD では `normalize_weights` と `constituent_modes` は使えません。
 | 機能 | 理論上の意味 | 実装 |
 | --- | --- | --- |
 | `constituent_modes=True` | $\phi_k=\hat Q_k\mathbf a_1$, $\phi_l=\hat Q_l\mathbf a_1$ も出力 | [base.py:669-674](../pybmd/bmd/base.py#L669-L674) |
-| `normalize_weights=True` | 変数ごとに $w\leftarrow w/\operatorname{var}(q_v)$（異なる単位の変数を揃える） | [weights.py:94](../pybmd/utils/weights.py#L94) |
-| `normalize_data=True` | 各ブロック・各点・各変数を標準偏差で割る | [base.py:571-577](../pybmd/bmd/base.py#L571-L577) |
-| `mean_type='blockwise'` | ブロックごとの平均を除去 | [base.py:568](../pybmd/bmd/base.py#L568) |
-| `window='hann'/'boxcar'` | 窓の選択 | [utils.py:76](../pybmd/bmd/utils.py#L76) |
+| `window='hann'` | 窓の選択 | [utils.py:61](../pybmd/bmd/utils.py#L61) |
 | MPI 並列 | トライアドをラウンドロビンで分配し `allreduce` | [base.py:638](../pybmd/bmd/base.py#L638), [base.py:690-694](../pybmd/bmd/base.py#L690-L694) |
-
-`normalize_data=True` は複素数の入力データに対して分散の計算が誤っています（$|x|^2$ ではなく $x^2$ を使っている）。
-実数データには影響しません。詳細は [docs/complex-conjugation-audit.md](complex-conjugation-audit.md)。
 
 ---
 

@@ -116,7 +116,7 @@ def triad_label(k, l):
 
 
 def plot_mode_bispectrum(L, freq, log=True, levels=None, xlim=None, ylim=None,
-                         cmap='viridis', mark=None, figsize=(6, 6), title='',
+                         cmap='jet', mark=None, figsize=(6, 6), title='',
                          xlabel=r'$f_1$', ylabel=r'$f_2$', path=None,
                          filename=None, ax=None, extend='both',
                          extendrect=True, cbar_label=None):
@@ -178,7 +178,7 @@ def plot_mode_bispectrum(L, freq, log=True, levels=None, xlim=None, ylim=None,
 
     if mark:
         for m_f1, m_f2 in mark:
-            ax.plot(m_f1, m_f2, 'o', ms=8, mfc='none', mec='r', mew=1.5)
+            ax.plot(m_f1, m_f2, 'o', ms=8, mfc='none', mec='k', mew=1.5)
 
     ax.figure.colorbar(im, ax=ax, extendrect=extendrect, label=cbar_label)
     if filename:

@@ -18,7 +18,7 @@ PyBMD のどのコードに対応するかという観点で整理した文書�
 | 4. トライアド $(k,l,k+l)$ の列挙 | $f_k+f_l=f_{k+l}$ | [utils.py:299](../pybmd/bmd/utils.py#L299) `triad_indices` |
 | 5. 実現行列の組み立て | $\hat Q_{k+l},\ \hat Q_{k\circ l}=\hat Q_k\circ\hat Q_l$ | [standard.py:60](../pybmd/bmd/standard.py#L60) `_triad_matrices` |
 | 6. バイスペクトル密度行列 | $\mathbf B = \hat Q_{k+l}^H \mathbf W \hat Q_{k\circ l}/N_\mathrm{blk}$ | [base.py:646](../pybmd/bmd/base.py#L646) |
-| 7. 数値半径の最大化 | $\mathbf a_1=\arg\max_{\lVert\mathbf a\rVert=1}\lvert\mathbf a^H\mathbf B\mathbf a\rvert$ | [optimizers.py:340](../pybmd/bmd/optimizers.py#L340) `solve` |
+| 7. 数値半径の最大化 | $\mathbf a_1=\arg\max_{\lVert\mathbf a\rVert=1}\lvert\mathbf a^H\mathbf B\mathbf a\rvert$ | [optimizers.py:105](../pybmd/bmd/optimizers.py#L105) `solve` |
 | 8. モード・モードバイスペクトル | $\lambda_1,\ \phi_{k+l},\ \phi_{k\circ l}$ | [base.py:656-679](../pybmd/bmd/base.py#L656-L679) |
 
 呼び出し順は `Base.fit()` → `_initialize` → `_compute_qhat` → `_triad_loop` → `_store_and_save` です
@@ -288,7 +288,7 @@ $$
 $r(\mathbf B)$ は $\mathbf B$ の**数値半径**（field of values の最大絶対値）です。$\mathbf B$ はエルミートではないので、固有値問題ではなく数値半径の最大化問題になります。
 制約 $\lVert\mathbf a\rVert_2=1$ は $\mathbf W$ を含まない通常のユークリッドノルムです。
 
-- 実装: [base.py:652-655](../pybmd/bmd/base.py#L652-L655) `r, a = optimizers.solve(B, ...)`
+- 実装: [base.py:652-655](../pybmd/bmd/base.py#L652-L655) `r, a = optimizers.mengi_overton(B, ...)`
 - `r` は**複素数** $\lambda_1$ です（絶対値ではありません）。`L` にはこの複素数がそのまま入り、図にするとき $|L|$ をとります（[postproc.py:271](../pybmd/bmd/postproc.py#L271)）。
 
 ### 5.2 数値半径の性質とソルバ
@@ -309,12 +309,10 @@ $$
 
 | 関数 | 理論上の役割 |
 | --- | --- |
-| [optimizers.py:51](../pybmd/bmd/optimizers.py#L51) `max_fov(A, theta)` | $\lambda_{\max}(\mathbf H(\theta))$ |
-| [optimizers.py:95](../pybmd/bmd/optimizers.py#L95) `_dominant_eigvec(A, phi)` | $\mathbf H(\phi)$ の最大固有ベクトル $\mathbf a$ と $\mathbf a^H\mathbf B\mathbf a$ |
-| [optimizers.py:229](../pybmd/bmd/optimizers.py#L229) `mengi_overton` | Mengi & Overton (2005) のレベルセット法。**既定**、大域収束 |
-| [optimizers.py:177](../pybmd/bmd/optimizers.py#L177) `simple_iteration` | Watson の単純反復（論文付録 Algorithm 1）。局所解のみ |
-| [optimizers.py:142](../pybmd/bmd/optimizers.py#L142) `default_start` | 初期ベクトル（$\theta$ の粗い走査。乱数を使わない） |
-| [optimizers.py:107](../pybmd/bmd/optimizers.py#L107) `_pow2_scale` | $\lVert\mathbf B\rVert_1\in(1/2,1]$ への 2 のべき乗スケーリング |
+| [optimizers.py:24](../pybmd/bmd/optimizers.py#L24) `max_fov(A, theta)` | $\lambda_{\max}(\mathbf H(\theta))$ |
+| [optimizers.py:58](../pybmd/bmd/optimizers.py#L58) `_dominant_eigvec(A, phi)` | $\mathbf H(\phi)$ の最大固有ベクトル $\mathbf a$ と $\mathbf a^H\mathbf B\mathbf a$ |
+| [optimizers.py:105](../pybmd/bmd/optimizers.py#L105) `mengi_overton` | Mengi & Overton (2005) のレベルセット法。大域収束（唯一のソルバ） |
+| [optimizers.py:70](../pybmd/bmd/optimizers.py#L70) `_pow2_scale` | $\lVert\mathbf B\rVert_1\in(1/2,1]$ への 2 のべき乗スケーリング |
 
 **Mengi–Overton 法の要点.** レベル $w$ に対し、$\lambda_{\max}(\mathbf H(\theta)) = w$ となる角度 $\theta$ は、一般化固有値問題
 
@@ -324,22 +322,13 @@ $$
 \mathbf S=\begin{bmatrix}\mathbf B & \mathbf 0\\ \mathbf 0 & \mathbf I\end{bmatrix}
 $$
 
-の単位円上の固有値 $\mu = e^{\mathrm i\theta}$ として得られます（[optimizers.py:303-307](../pybmd/bmd/optimizers.py#L303-L307)）。
+の単位円上の固有値 $\mu = e^{\mathrm i\theta}$ として得られます（[optimizers.py:150-154](../pybmd/bmd/optimizers.py#L150-L154)）。
 交差角で区切られた区間の中点のうち、$w$ を超えるものを次の候補にします。候補がなくなれば、現在のレベルが大域最大です。
-
-**Watson の単純反復.** 次の更新を収束するまで繰り返します（[optimizers.py:212-214](../pybmd/bmd/optimizers.py#L212-L214)）。
-
-$$
-w_{m} = \mathbf a_m^H\mathbf B\mathbf a_m,\qquad
-\mathbf a_{m+1} \propto w_m\,\mathbf B^H\mathbf a_m + \overline{w_m}\,\mathbf B\,\mathbf a_m
-$$
 
 **スケーリング.** 数値半径は $r(c\mathbf B)=c\,r(\mathbf B)$（$c>0$）を満たし、最大化ベクトルは変わりません。
 実際の $\mathbf B$ は $1/N_\mathrm{blk}$ と重みのため非常に小さく（$\lVert\mathbf B\rVert_1\sim10^{-6}$ など）、MATLAB 版の絶対許容誤差では交差角が全て棄却されて過小評価が起きます。
 PyBMD は 2 のべき乗で正規化してから解き（2 進浮動小数点で誤差なし）、最後に元の $\mathbf B$ で $\mathbf a^H\mathbf B\mathbf a$ を評価し直します。
 この修正を含む MATLAB 版からの逸脱の詳細は [pybmd/bmd/CLAUDE.md](../pybmd/bmd/CLAUDE.md) の "Deviations" 節にあります。
-
-`solver='MengiOvertonMATLAB'` は、MATLAB 版の結果（過小評価を含む）を再現したいときだけ使う互換モードです。
 
 ### 5.3 論文表記との関係（$\mathbf B$ と $\mathbf B^H$）
 
@@ -427,7 +416,7 @@ $$
 | `modes/triad_idx_XXXXXXXX.npy` | トライアドごとのモード `(n_comp, *xshape, nv)` |
 | `params_modes.yaml` | パラメータ |
 
-保存結果の読み込みは [pybmd/bmd/postproc.py](../pybmd/bmd/postproc.py) の `load_results` です。
+後処理（[pybmd/bmd/postproc.py](../pybmd/bmd/postproc.py)）はパスではなく fit 済みの `Standard`/`Cross` を受け取ります。保存しておく場合は `pickle` で `Standard` ごと保存し、読み込んでから渡します。
 
 ---
 
@@ -515,4 +504,4 @@ a1  = bmd.coeffs[i]                 # a_1
 - 実数データなら `regions=[1,2]` で平面全体を代表できる。複素数データでは不十分（§3.3）。
 - `regions` は 1 始まり、`state_idx`/`qr_idx` は 0 始まり。
 - $|\lambda_1|$ の絶対値は重み $\mathbf W$ の規約に比例して変わる。MATLAB 版の図と比べるときは一様重みを使う。
-- 既定ソルバ `MengiOverton` は MATLAB 版の過小評価を修正している。MATLAB 版との数値の差はこれが主因（[tests/octave/octave_cross_validation.md](../tests/octave/octave_cross_validation.md)）。
+- ソルバ `MengiOverton` は MATLAB 版の過小評価を修正している。MATLAB 版との数値の差はこれが主因（[tests/octave/octave_cross_validation.md](../tests/octave/octave_cross_validation.md)）。

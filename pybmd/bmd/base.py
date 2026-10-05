@@ -82,13 +82,9 @@ class Base():
         self._regions = params.get('regions', [1, 2])
         self._max_freq_idx = params.get('max_freq_idx', None)
 
-        ##--- optional: solver
-        self._solver = params.get('solver', 'MengiOverton')
+        ##--- optional: solver (Mengi-Overton)
         self._solver_tol = params.get('tol', 1e-6)
         self._solver_n_it_max = params.get('n_it_max', 500)
-        # explicit start vector for the iterative solvers, used to reproduce
-        # results from another implementation
-        self._solver_z0 = params.get('solver_z0', None)
 
         ##--- optional: storage
         self._dtype = params.get('dtype', 'double')
@@ -123,18 +119,9 @@ class Base():
             self._size = 1
 
         ## validate eagerly, so a bad configuration fails before any I/O
-        if self._solver not in optimizers.SOLVERS:
-            raise ValueError(
-                f'solver must be one of {optimizers.SOLVERS}; '
-                f'got {self._solver!r}.')
         if self._mean_type.lower() not in ('longtime', 'blockwise', 'zero',
                                            'none'):
             raise ValueError(f'{self._mean_type} not recognized.')
-        if self._solver_z0 is not None and self._solver != 'simpleIteration':
-            raise ValueError(
-                f'solver_z0 is only used by the simpleIteration solver; the '
-                f'{self._solver} solver is deterministic and takes no start '
-                f'vector.')
         if self._n_dft < 4:
             raise ValueError(
                 f'n_dft must be at least 4; got {self._n_dft}.')
@@ -247,16 +234,6 @@ class Base():
         return self._savedir_sim
 
     @property
-    def modes_dir(self):
-        '''Directory where modes are saved.'''
-        return self._modes_dir
-
-    @property
-    def dim(self):
-        '''Number of dimensions of the data matrix.'''
-        return self._dim
-
-    @property
     def shape(self):
         '''Shape of the data matrix.'''
         return self._shape
@@ -342,29 +319,19 @@ class Base():
         return self._weights
 
     @property
-    def bispectrum(self):
-        '''
-        The mode bispectrum ``L``, of shape ``(n_freq, n_freq)``. Entries that
-        do not correspond to a computed triad are NaN.
-        '''
-        return self._L
-
-    @property
     def L(self):
-        '''Alias of :attr:`bispectrum`.'''
+        '''
+        The mode bispectrum, of shape ``(n_freq, n_freq)``. Entries that do
+        not correspond to a computed triad are NaN.
+        '''
         return self._L
-
-    @property
-    def energy_transfer(self):
-        '''
-        The energy-transfer term ``T``, of shape ``(n_freq, n_freq)``. Entries
-        that do not correspond to a computed triad are NaN.
-        '''
-        return self._T
 
     @property
     def T(self):
-        '''Alias of :attr:`energy_transfer`.'''
+        '''
+        The energy-transfer term, of shape ``(n_freq, n_freq)``. Entries that
+        do not correspond to a computed triad are NaN.
+        '''
         return self._T
 
     @property
@@ -690,9 +657,8 @@ class Base():
             # requested dtype -- B is only (n_blocks, n_blocks), so the accuracy
             # is free -- but the results are stored at the requested precision
             B = B.astype(np.complex128, copy=False)
-            r, a = optimizers.solve(
-                B, solver=self._solver, tol=self._solver_tol,
-                n_it_max=self._solver_n_it_max, z0=self._solver_z0)
+            r, a = optimizers.mengi_overton(
+                B, tol=self._solver_tol, n_it_max=self._solver_n_it_max)
             a = a.astype(self._complex)
             psi_sum = q_sum @ a
             psi_prod = q_prod @ a
@@ -800,7 +766,6 @@ class Base():
         self._params['n_blocks'] = int(self._n_blocks)
         self._params['n_overlap'] = int(self._n_overlap)
         self._params['overlap'] = float(self._overlap)
-        self._params['solver'] = str(self._solver)
 
         if self._rank == 0:
             # arrays first: the YAML dump is the one step that can fail on an
@@ -860,15 +825,8 @@ class Base():
         self._pr0(f'Max frequency index      : {self._max_freq_idx} '
                   f'(Nyquist index {self._triads.f_nyq_idx})')
         self._pr0(f'Number of triads         : {self.n_triads}')
-        # flag the bug-compatible solver loudly: it exists only to reproduce
-        # a specific published MATLAB result and always under-estimates, so
-        # a run must not be able to use it silently
-        compat_note = (' [MATLAB-COMPATIBLE: reproduces refs/bmd/bmd.m\'s '
-                       'known under-estimation bug -- see optimizers.py]'
-                       if self._solver == 'MengiOvertonMATLAB' else '')
-        self._pr0(f'Solver (x*Ax)            : {self._solver} '
-                  f'(tol {self._solver_tol}, n_it_max {self._solver_n_it_max})'
-                  f'{compat_note}')
+        self._pr0(f'Solver (x*Ax)            : MengiOverton '
+                  f'(tol {self._solver_tol}, n_it_max {self._solver_n_it_max})')
         self._pr0(f'MPI ranks                : {self._size}')
         self._pr0(f'Results to be saved in   : {self._savedir}')
         self._pr0(f'------------------------------------')

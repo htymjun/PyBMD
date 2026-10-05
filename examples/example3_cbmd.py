@@ -33,7 +33,7 @@ def main(save_dir='example3_out'):
     data = np.stack([u, u, u], axis=-1)
 
     common = dict(n_dft=64, time_step=dt, n_space_dims=2, n_overlap=32,
-                  regions=[1, 2], max_freq_idx=12, solver='MengiOverton')
+                  regions=[1, 2], max_freq_idx=12)
 
     cbmd = Cross(
         params=dict(common, n_variables=3, state_idx=[0], qr_idx=[[1, 2]],

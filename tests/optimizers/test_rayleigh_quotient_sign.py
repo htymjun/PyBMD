@@ -11,7 +11,7 @@ CF = os.path.realpath(__file__)
 CFD = os.path.dirname(CF)
 sys.path.append(os.path.join(CFD, '../../'))
 
-from pybmd.bmd.optimizers import solve, SOLVERS
+from pybmd.bmd.optimizers import mengi_overton
 from conftest import random_matrices
 
 
@@ -24,14 +24,13 @@ def test_diagonal_case_keeps_its_sign():
     every other test in this directory only ever checks abs(w).
     '''
     A = np.diag([1.0 + 0j, -4.0, 2.5])
-    w, _ = solve(A, solver='MengiOverton')
+    w, _ = mengi_overton(A)
     assert w == pytest.approx(-4.0)
 
 
 @pytest.mark.parametrize('A', random_matrices())
-@pytest.mark.parametrize('solver', SOLVERS)
-def test_w_is_exactly_the_rayleigh_quotient(A, solver):
+def test_w_is_exactly_the_rayleigh_quotient(A):
     '''Whatever z the solver settles on, w must equal z^H A z exactly -- this
     is the definition, not an approximation the solver is free to round.'''
-    w, z = solve(A, solver=solver, tol=1e-10)
+    w, z = mengi_overton(A, tol=1e-10)
     assert w == pytest.approx(z.conj() @ A @ z, abs=1e-9)

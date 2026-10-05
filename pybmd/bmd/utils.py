@@ -216,19 +216,6 @@ class Triads:
         return np.unique(np.concatenate(
             [self.f1_idx, self.f2_idx, self.f3_idx]))
 
-    @property
-    def linear_idx(self):
-        '''
-        (n_triads,) C-order linear index into an ``(n_freq, n_freq)`` array.
-
-        .. note::
-
-            The MATLAB implementation returns the Fortran-order ``sub2ind``
-            value instead. Use :meth:`find` rather than a linear index.
-        '''
-        return np.ravel_multi_index(
-            (self.f1_idx, self.f2_idx), (self.n_freq, self.n_freq))
-
     def row_of(self, k):
         '''
         Row of the frequency axis holding integer frequency index ``k``.
@@ -265,35 +252,12 @@ class Triads:
                 f'index bound {bound}.')
         return t
 
-    def find_freq(self, f1, f2):
-        '''
-        Triad index nearest to the physical frequency doublet ``(f1, f2)``.
-
-        :param float f1: requested first frequency.
-        :param float f2: requested second frequency.
-
-        :return: index into the per-triad arrays.
-        :rtype: int
-        '''
-        i = int(np.argmin(np.abs(self.freq - f1)))
-        j = int(np.argmin(np.abs(self.freq - f2)))
-        return self.find(int(self.f_idx[i]), int(self.f_idx[j]))
-
     def to_npz(self, path):
         '''Save to ``path`` as a .npz archive.'''
         np.savez(path, freq=self.freq, f_idx=self.f_idx,
                  f_nyq_idx=self.f_nyq_idx, f1_idx=self.f1_idx,
                  f2_idx=self.f2_idx, f3_idx=self.f3_idx, region=self.region,
                  triad_map=self.triad_map)
-
-    @classmethod
-    def from_npz(cls, path):
-        '''Load from a .npz archive written by :meth:`to_npz`.'''
-        with np.load(path) as d:
-            return cls(freq=d['freq'], f_idx=d['f_idx'],
-                       f_nyq_idx=int(d['f_nyq_idx']), f1_idx=d['f1_idx'],
-                       f2_idx=d['f2_idx'], f3_idx=d['f3_idx'],
-                       region=d['region'], triad_map=d['triad_map'])
 
 
 def triad_indices(n_dft, dt=None, regions=(1, 2), max_freq_idx=None):

@@ -5,10 +5,9 @@ Testing strategy detail. See the root [`CLAUDE.md`](../CLAUDE.md) for the pytest
 
 Four layers, from solver to paper:
 
-- `tests/optimizers/` (one test function per file): the numerical-radius solvers against a
-  brute-force angular scan and against each other — signed `max_fov`, `_pow2_scale` (including
-  subnormals), scale equivariance, the `MengiOvertonMATLAB` under-estimate, iteration caps,
-  determinism. These run in a few seconds and need nothing but NumPy/SciPy.
+- `tests/optimizers/` (one test function per file): `mengi_overton` against a brute-force
+  angular scan and closed-form radii — signed `max_fov`, `_pow2_scale` (including subnormals),
+  scale equivariance, iteration caps, determinism. These run in a few seconds and need nothing but NumPy/SciPy.
 - `test_hypothesis.py`: Schmidt (2020)'s hypothesis test on the surrogate data of
   `examples/example4_hypothesis_testing.py` (whose `fit_case`/`surrogate_waves` it imports) — the
   resonant triad is detected at the right bin and scale, non-resonant and quartet cases stay
@@ -20,7 +19,7 @@ Four layers, from solver to paper:
 - `test_octave_reference.py` (marker `slow`): the reference `refs/bmd/bmd.m`/`cbmd.m` run live
   under Octave, in three tiers — A: `Q_hat` and every per-triad `B` from an instrumented copy,
   isolating the DFT/blocking/weighting stage from the solver; B: `L`, `T` and the modes end to
-  end; C: the solver deviations and `MengiOvertonMATLAB`'s bug-compatibility, measured.
+  end; C: the solver deviations, measured.
   `tests/octave/octave_ref.py` is the harness, `tests/octave/build_report.py` regenerates the
   figures of [`octave/octave_cross_validation.md`](octave/octave_cross_validation.md).
 - `test_io_rejects_complex.py`: complex data is refused rather than cast to its real part.

@@ -1,162 +1,26 @@
 '''
-Module implementing bispectrum-specific post-processing: result-directory
-loaders, the mode bispectrum map over the ``f1``-``f2`` plane, and the mode
-panels for a chosen triad.
-
-This is the only module that knows about triads and regions; generic getters
-and field plots live in :mod:`pybmd.utils.postproc`.
+Module implementing bispectrum-specific post-processing of a fitted
+``Standard``/``Cross``: the strongest triads, the mode bispectrum map over the
+``f1``-``f2`` plane, and the mode panels for a chosen triad.
 '''
-from dataclasses import dataclass
 import os
 
 import numpy as np
-import yaml
-
-from pybmd.bmd.utils import Triads
-from pybmd.utils.postproc import get_bispectrum, get_modes_at_triad
-from pybmd.utils.postproc import (_save_figure, _save_show_plots,
-                                  _symmetric_levels)
 
 
 __all__ = [
-    'BMDResults',
-    'find_result_directories',
-    'resolve_results_path',
-    'load_results',
     'top_triads',
     'plot_mode_bispectrum',
     'plot_energy_transfer',
     'plot_triad_modes',
-    'plot_mode_bispectrum_from_dir',
-    'plot_energy_transfer_from_dir',
-    'plot_triad_modes_from_dir',
-    'plot_peak_triad_from_dir',
 ]
-
-
-@dataclass(frozen=True, eq=False)
-class BMDResults:
-    '''
-    Results loaded from a BMD/CBMD results directory.
-
-    ``path`` is the simulation directory containing ``bispectrum.npz`` and
-    ``triads.npz``. For a standard run this is the nested directory named like
-    ``nfft64_novlp32_nblks10``.
-
-    ``eq=False``: the fields are arrays, so the generated ``__eq__`` and
-    ``__hash__`` would raise; instances compare by identity.
-    '''
-    path: str
-    L: np.ndarray
-    T: np.ndarray
-    freq: np.ndarray
-    f_idx: np.ndarray
-    triads: Triads
-    params: dict
-
-    @property
-    def bispectrum(self):
-        '''Alias of :attr:`L`.'''
-        return self.L
-
-    @property
-    def energy_transfer(self):
-        '''Alias of :attr:`T`.'''
-        return self.T
-
-    def find_triad(self, k, l):
-        '''Triad index of ``(k, l, k+l)``.'''
-        return self.triads.find(k, l)
-
-    def get_modes_at_triad(self, triad_idx):
-        '''Load the two modes of one triad from disk.'''
-        return get_modes_at_triad(self.path, triad_idx)
-
-    def get_modes_at_freqs(self, k, l):
-        '''Load the modes of the triad ``(k, l, k+l)`` from disk.'''
-        return self.get_modes_at_triad(self.find_triad(k, l))
-
-
-def find_result_directories(path):
-    '''
-    Find BMD/CBMD simulation result directories under ``path``.
-
-    :param str path: either a simulation directory itself or a parent
-        ``savedir`` containing ``nfft*_novlp*_nblks*`` subdirectories.
-
-    :return: sorted absolute paths containing ``bispectrum.npz``.
-    :rtype: list(str)
-    '''
-    path = os.path.abspath(os.fspath(path))
-    if os.path.exists(os.path.join(path, 'bispectrum.npz')):
-        return [path]
-    if not os.path.isdir(path):
-        raise FileNotFoundError(f'no such results directory: {path}')
-
-    matches = []
-    for root, dirs, files in os.walk(path):
-        if 'bispectrum.npz' in files:
-            matches.append(root)
-            dirs[:] = []
-    return sorted(matches)
-
-
-def resolve_results_path(path, latest=False):
-    '''
-    Resolve ``path`` to one concrete simulation result directory.
-
-    If ``path`` already contains ``bispectrum.npz`` it is returned as-is. If it
-    is a parent directory with exactly one result below it, that child is used.
-    With ``latest=True``, the newest matching result directory is selected.
-    '''
-    matches = find_result_directories(path)
-    if not matches:
-        raise FileNotFoundError(
-            f'no bispectrum.npz found under {os.path.abspath(os.fspath(path))}')
-    if len(matches) == 1:
-        return matches[0]
-    if latest:
-        return max(matches, key=os.path.getmtime)
-    msg = '\n'.join(matches[:10])
-    more = '' if len(matches) <= 10 else f'\n... and {len(matches) - 10} more'
-    raise ValueError(
-        f'found {len(matches)} result directories. Pass one of them directly, '
-        f'or set latest=True:\n{msg}{more}')
-
-
-def load_results(path, latest=False):
-    '''
-    Load BMD/CBMD arrays and triad metadata from a results directory.
-
-    :param str path: the simulation directory, or a parent savedir containing
-        one simulation directory.
-    :param bool latest: choose the newest result when ``path`` contains more
-        than one. Default is False.
-
-    :return: a :class:`BMDResults` bundle.
-    :rtype: BMDResults
-    '''
-    results_path = resolve_results_path(path, latest=latest)
-    L, T, freq, f_idx = get_bispectrum(results_path)
-    triads_path = os.path.join(results_path, 'triads.npz')
-    if not os.path.exists(triads_path):
-        raise FileNotFoundError(f'missing triads metadata: {triads_path}')
-    triads = Triads.from_npz(triads_path)
-
-    params_path = os.path.join(results_path, 'params_modes.yaml')
-    params = {}
-    if os.path.exists(params_path):
-        with open(params_path) as f:
-            params = yaml.load(f, Loader=yaml.FullLoader) or {}
-    return BMDResults(results_path, L, T, freq, f_idx, triads, params)
 
 
 def top_triads(results, n=10, quantity='L', exclude_zero=True):
     '''
-    Return the strongest triads in a loaded result.
+    Return the strongest triads of a fitted decomposition.
 
-    :param results: a :class:`BMDResults`, a fitted ``Standard``/``Cross``,
-        or a results directory accepted by :func:`load_results`.
+    :param results: a fitted ``Standard`` or ``Cross``.
     :param int n: number of triads to return.
     :param str quantity: ``'L'`` for mode bispectrum or ``'T'`` for energy
         transfer magnitude.
@@ -166,9 +30,6 @@ def top_triads(results, n=10, quantity='L', exclude_zero=True):
         frequencies, region, and value.
     :rtype: numpy.ndarray
     '''
-    if isinstance(results, (str, os.PathLike)):
-        results = load_results(results)
-
     quantity = quantity.upper()
     if quantity == 'L':
         grid = results.L
@@ -200,6 +61,32 @@ def top_triads(results, n=10, quantity='L', exclude_zero=True):
     out['region'] = t.region[order]
     out['value'] = values[order]
     return out
+
+
+def _save_figure(fig, filename, path=None):
+    '''Save ``fig`` as ``path/filename``, creating ``path`` (default: the
+    working directory) if needed.'''
+    if path is None:
+        path = os.getcwd()
+    os.makedirs(path, exist_ok=True)
+    fig.savefig(os.path.join(path, filename), dpi=200, bbox_inches='tight')
+
+
+def _save_show_plots(filename, path, plt):
+    '''Save the current figure if a filename is given, otherwise show it.'''
+    if filename:
+        _save_figure(plt.gcf(), filename, path)
+        plt.close()
+    else:
+        plt.show()
+
+
+def _symmetric_levels(field, n_levels=257, scale=0.5):
+    '''Contour levels symmetric about zero, as used for real mode fields.'''
+    m = scale * np.max(np.abs(field))
+    if m == 0:
+        m = 1.0
+    return m * np.linspace(-1, 1, n_levels)
 
 
 def _top_triad_dtype():
@@ -441,76 +328,3 @@ def plot_triad_modes(modes, k, l, x1=None, x2=None, vars_idx=(0,),
         fig.tight_layout()
     _save_show_plots(filename, path, plt)
     return fig
-
-
-def plot_mode_bispectrum_from_dir(results_path, latest=False, **kwargs):
-    '''
-    Load a results directory and contour its mode bispectrum.
-
-    ``kwargs`` are forwarded to :func:`plot_mode_bispectrum`.
-    '''
-    results = load_results(results_path, latest=latest)
-    return plot_mode_bispectrum(results.L, results.freq, **kwargs)
-
-
-def plot_energy_transfer_from_dir(results_path, latest=False, **kwargs):
-    '''
-    Load a results directory and contour its energy-transfer map.
-
-    ``kwargs`` are forwarded to :func:`plot_energy_transfer`.
-    '''
-    results = load_results(results_path, latest=latest)
-    return plot_energy_transfer(results.T, results.freq, **kwargs)
-
-
-def plot_triad_modes_from_dir(results_path, k=None, l=None, triad_idx=None,
-                              latest=False, x1=None, x2=None, vars_idx=(0,),
-                              **kwargs):
-    '''
-    Load and plot modes for one triad from a results directory.
-
-    Select the triad either by ``triad_idx`` or by the integer frequency pair
-    ``k, l``. ``kwargs`` are forwarded to :func:`plot_triad_modes`.
-    '''
-    results = load_results(results_path, latest=latest)
-    if triad_idx is None:
-        if k is None or l is None:
-            raise ValueError('pass either triad_idx or both k and l.')
-        triad_idx = results.find_triad(k, l)
-    else:
-        triad_idx = int(triad_idx)
-        k = int(results.triads.k[triad_idx])
-        l = int(results.triads.l[triad_idx])
-    modes = results.get_modes_at_triad(triad_idx)
-    return plot_triad_modes(modes, k, l, x1=x1, x2=x2, vars_idx=vars_idx,
-                            **kwargs)
-
-
-def plot_peak_triad_from_dir(results_path, n=1, quantity='L', latest=False,
-                             exclude_zero=True, x1=None, x2=None,
-                             vars_idx=(0,), mark=True,
-                             bispectrum_kwargs=None, modes_kwargs=None):
-    '''
-    Plot the bispectrum and modes for the strongest triad in a result.
-
-    :return: ``(bispectrum_axes, modes_figure, top)``, where ``top`` is the
-        one-row structured array returned by :func:`top_triads`.
-    '''
-    results = load_results(results_path, latest=latest)
-    top = top_triads(results, n=n, quantity=quantity,
-                    exclude_zero=exclude_zero)
-    if top.size == 0:
-        raise ValueError('no finite triads found to plot.')
-
-    peak = top[0]
-    bispectrum_kwargs = dict(bispectrum_kwargs or {})
-    modes_kwargs = dict(modes_kwargs or {})
-    if mark:
-        bispectrum_kwargs.setdefault('mark', [(float(peak['f1']),
-                                               float(peak['f2']))])
-
-    ax = plot_mode_bispectrum(results.L, results.freq, **bispectrum_kwargs)
-    fig = plot_triad_modes_from_dir(
-        results.path, triad_idx=int(peak['triad_idx']), x1=x1, x2=x2,
-        vars_idx=vars_idx, **modes_kwargs)
-    return ax, fig, top

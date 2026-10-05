@@ -146,7 +146,6 @@ def main(save_dir='example5_out'):
         n_variables=nv,           # q = [u, v], as in the paper
         overlap=50,
         regions=[1, 2],           # sum- and difference-interactions
-        solver='MengiOverton',
         save_modes=False,
         store_modes=False,        # ~43k triads: modes would be ~15 GB
         compute_energy_transfer=False,

@@ -188,7 +188,7 @@ $\mathbf B$ は次の 2 つの対称性を持ちます。
 2. **実数データの共役対称性**：$\hat q_{-k} = \overline{\hat q_k}$ より $\mathbf B(-k,-l) = \overline{\mathbf B(k,l)}$。したがって $\lambda_1(-k,-l)=\overline{\lambda_1(k,l)}$ です。
 
 この 2 つを使うと、実数データでは領域 1（和の相互作用 $k\ge l\ge 0$）と領域 2（差の相互作用 $k\ge|l|,\ l\le 0$）で平面全体を代表できます。
-**複素数データ**では 2. が成り立たないので、必要に応じて他の領域も指定してください。
+PyBMD は入力を実数に限定しています（複素数は `get_data_array` が `TypeError` で拒否）。
 
 （乱数データで $L(3,2)=L(2,3)$ と $L(-3,-2)=\overline{L(3,2)}$ を数値的に確認済みです。）
 
@@ -490,7 +490,7 @@ a1  = bmd.coeffs[i]                 # a_1
 - `L` は**複素数** $\lambda_1$。モードバイスペクトルはその絶対値 $|\lambda_1|$。位相の規約は MATLAB 版と同じ（§5.3）。
 - `T` は重みを含まない。一様重みなら $T=\mathrm{Re}\,\lambda_1$。
 - モードは単位複素数倍の不定性を持つ（§5.4）。
-- 実数データなら `regions=[1,2]` で平面全体を代表できる。複素数データでは不十分（§3.3）。
+- 入力は実数のみ。`regions=[1,2]` で平面全体を代表できる（§3.3）。
 - `regions` は 1 始まり、`state_idx`/`qr_idx` は 0 始まり。
 - $|\lambda_1|$ の絶対値は重み $\mathbf W$ の規約に比例して変わる。MATLAB 版の図と比べるときは一様重みを使う。
 - ソルバ `MengiOverton` は MATLAB 版の過小評価を修正している。MATLAB 版との数値の差はこれが主因（[tests/octave/octave_cross_validation.md](../tests/octave/octave_cross_validation.md)）。

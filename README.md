@@ -34,7 +34,7 @@ triplets `{f1, f2, f1+f2}`, or index triplets `(k, l, k+l)`.*
 ```bash
 pip install -e .              # core: numpy, scipy, pyyaml, matplotlib
 pip install -e '.[mpi]'       # add mpi4py for parallel runs
-pip install -e '.[io,test]'   # .mat/.nc readers, and pytest
+pip install -e '.[io,test]'   # .mat reader (v7.3), and pytest
 ```
 
 ## Usage

@@ -137,21 +137,32 @@ and `example5_cylinder_paper.py` (cylinder-wake mode bispectrum and modes, Figs.
 | `max_freq_idx` | `None` | bound on `\|k\|` and `\|l\|`; default is Nyquist |
 | `tol` | `1e-6` | Mengi–Overton solver tolerance |
 | `n_it_max` | `500` | Mengi–Overton iteration cap |
-| `dtype` | `'double'` | `'double'` or `'single'` |
+| `dtype` | `'double'` | `'double'` or `'single'`: precision of the computation |
+| `save_dtype` | `dtype` | `'double'` or `'single'`: precision of the arrays written to disk (`bispectrum.npz`'s `L`/`T`, `coeffs.npy`, `weights.npy`, `ltm_modes.npy`, `modes/`); the frequencies stay double |
 | `save_modes` | `True` | write `modes/triad_idx_{i:08d}.npy` |
+| `save_modes_top` | `None` | write the modes of only the strongest triads, ranked by `\|L\|` as `top_triads` ranks them (`k = 0` and `l = 0` excluded): an `int` is a count, a `float` in (0, 1] a fraction; `None` writes every triad |
 | `store_modes` | `False` | also keep all modes in memory, exposed as `.modes` |
+| `max_modes_gb` | `8.0` | refuse to run if `save_modes`/`store_modes` would keep more than this many GB of modes (on disk at `save_dtype`, in memory at `dtype`); `None` disables the check |
 | `compute_energy_transfer` | `True` | fill the energy-transfer term `T` |
 | `savedir` | `'bmd_results'` | results directory |
 
 Results are written to `<savedir>/nfft{n_dft}_novlp{n_overlap}_nblks{n_blocks}/`, holding
 `bispectrum.npz`, `triads.npz`, `coeffs.npy`, `weights.npy`, `ltm_modes.npy`,
-`params_modes.yaml` and `modes/`.
+`params_modes.yaml` and `modes/`. With `save_modes_top`, `modes/` holds only the selected
+triads — still named by their global `triad_idx`, so the numbering is sparse — and
+`modes/saved_triad_idx.npy` lists them.
 
 `coeffs.npy` holds the maximisers of the numerical radius, one short vector per triad. Since the
 modes are just `Q @ a`, they can be rebuilt from these without re-running the optimizer — which
 is what makes it practical to run a large case with `save_modes=False` and decide afterwards
-which triads are worth reconstructing (the DFT rows of that triad have to be recomputed; there
-is no helper for this yet).
+which triads are worth reconstructing. On the fitted object, `bmd.reconstruct_modes(data, i)`
+recomputes only the DFT rows of triad(s) `i` and applies `coeffs`, giving the same modes `fit`
+would have saved; `get_modes_at_triad(i, data=data)` / `get_modes_at_freqs(k, l, data=data)` fall
+back to it for any triad without a mode file, so they can feed `plot_triad_modes` directly:
+
+```python
+plot_triad_modes(bmd.get_modes_at_freqs(k, l, data=data), k, l, x=x, y=y)
+```
 
 ## Deviations from the reference implementation
 

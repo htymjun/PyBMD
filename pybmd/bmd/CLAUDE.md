@@ -56,11 +56,23 @@ some triad actually references. With `max_freq_idx` set that is a small fraction
 - **`T` carries no weight**, unlike `B`. That is deliberate and matches the reference — don't
   "fix" it.
 - **`coeffs.npy` is the durable artifact.** Modes are just `Q @ a`, so a large case can run with
-  `save_modes=False` and have any triad reconstructed later — by recomputing the DFT rows of that
-  triad and applying `a`; there is no helper for this yet.
+  `save_modes=False` and have any triad reconstructed later — `reconstruct_modes(data, i)`
+  recomputes the DFT rows of that triad (`_compute_qhat(needed)`) and applies `a` through
+  `_modes_from_coeffs`, the same path `save_modes_top` uses, so the result is bit-identical to a
+  saved mode. It needs the fitted object (blocking, window, `t_mean`, `coeffs`) and the same data;
+  `get_modes_at_triad(..., data=)` falls back to it when no mode file exists.
+- **`save_modes_top` writes the modes after the reduction, not in the triad loop**, because the
+  ranking needs the complete `L`. Each rank rebuilds its own selected triads from `q_hat` and the
+  reduced `coeffs` (`_save_top_modes`), so the files are bit-identical to a full `save_modes` run.
+  The selection is `postproc.top_triads(self, n)` — keep the two in step. Files keep the global
+  `triad_idx` (never renumber: `coeffs`, `find` and `L` index by it); `modes/saved_triad_idx.npy`
+  lists them. An `int` is a count, a `float` in (0, 1] a fraction of the `k != 0`, `l != 0`
+  triads, so `1` and `1.0` differ.
 - **`store_modes` costs as much as `save_modes`, on every rank** (the full `(n_triads, n_comp,
   *mode_shape)` array plus its `allreduce` buffer, `n_comp` being 2 or 4 with
-  `constituent_modes`); the `MAX_MODES_GB` (8 GB) guard in `base.py` covers both.
+  `constituent_modes`); the `params['max_modes_gb']` guard (default `MAX_MODES_GB`, 8 GB; `None`
+  disables it) in `base.py` covers both, sizing `save_modes` at `save_dtype` and `store_modes` at
+  `dtype`.
 - **`constituent_modes` is a PyBMD addition, not a reference feature.** `bmd.m` allocates
   `P = zeros(2,nTriads,nx)` and never forms a mode from `Q_hat_f1*a` or `Q_hat_f2*a` alone — only
   their product feeds `B` and `psi_prod`. Setting `params['constituent_modes'] = True` appends

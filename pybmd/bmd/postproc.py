@@ -209,7 +209,8 @@ def plot_triad_modes(modes, k, l, x=None, y=None, vars_idx=(0,),
 
     :param numpy.ndarray modes: modes of one triad, of shape
         ``(2, ny, nx, nv)`` or ``(4, ny, nx, nv)``, as returned by
-        ``get_modes_at_triad``.
+        ``get_modes_at_triad``; pass it ``data=`` to rebuild a triad whose
+        modes were not saved.
     :param int k: integer frequency index of f1, used for the title.
     :param int l: integer frequency index of f2, used for the title.
     :param numpy.ndarray x: x coordinate, 1-D of length ``nx`` or 2-D

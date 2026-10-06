@@ -5,6 +5,7 @@ loop and storage. :class:`~pybmd.bmd.standard.Standard` and
 shape hooks below.
 '''
 import glob
+import math
 import os
 import time
 import warnings
@@ -14,6 +15,7 @@ import yaml
 
 import pybmd.bmd.utils as utils_bmd
 import pybmd.bmd.optimizers as optimizers
+import pybmd.bmd.postproc as postproc
 import pybmd.utils.io as utils_io
 import pybmd.utils.parallel as utils_par
 
@@ -43,6 +45,26 @@ def _yaml_safe(obj):
     if isinstance(obj, complex):
         return str(obj)
     return obj
+
+
+def _check_save_modes_top(top):
+    '''Validate ``params['save_modes_top']``: None, an int >= 1 (a count) or a
+    float in (0, 1] (a fraction of the candidate triads).'''
+    if top is None:
+        return None
+    if isinstance(top, (bool, np.bool_)):
+        raise TypeError('save_modes_top must be an int, a float or None.')
+    if isinstance(top, (int, np.integer)):
+        if top < 1:
+            raise ValueError(
+                f'save_modes_top as a count must be >= 1; got {top}.')
+        return int(top)
+    if isinstance(top, (float, np.floating)):
+        if not 0 < top <= 1:
+            raise ValueError(
+                f'save_modes_top as a fraction must be in (0, 1]; got {top}.')
+        return float(top)
+    raise TypeError('save_modes_top must be an int, a float or None.')
 
 
 class Base():
@@ -94,6 +116,10 @@ class Base():
         self._savedir = os.path.abspath(params.get('savedir', 'bmd_results'))
         self._save_modes = params.get('save_modes', True)
         self._store_modes = params.get('store_modes', False)
+        # write the modes of the strongest triads only: an int is a count, a
+        # float in (0, 1] a fraction; None writes every triad
+        self._save_modes_top = _check_save_modes_top(
+            params.get('save_modes_top', None))
         # None disables the check
         self._max_modes_gb = params.get('max_modes_gb', MAX_MODES_GB)
         # opt-in: also compute and store the two constituent modes phi_k,
@@ -436,6 +462,10 @@ class Base():
                 f'No triads to compute for regions={self._regions} and '
                 f'max_freq_idx={self._max_freq_idx}.')
 
+        # the triads whose modes are written; resolved to a count here so the
+        # size check below can use it, selected by |L| after the triad loop
+        self._n_saved_triads = self._resolve_save_modes_top()
+
         ## create folders to save results
         self._savedir_sim = os.path.join(
             self._savedir,
@@ -449,8 +479,10 @@ class Base():
             # with more triads may have left mode files here that this run
             # will not overwrite; every other file is rewritten, so these
             # would be the only stale state a loader could pick up
-            for stale in glob.glob(os.path.join(self._modes_dir,
-                                                'triad_idx_*.npy')):
+            for stale in (glob.glob(os.path.join(self._modes_dir,
+                                                 'triad_idx_*.npy'))
+                          + glob.glob(os.path.join(self._modes_dir,
+                                                   'saved_triad_idx.npy'))):
                 os.remove(stale)
         utils_par.barrier(self._comm)
 
@@ -462,14 +494,16 @@ class Base():
                               * self._complex(1).nbytes * B2GB)
         # modes are held in memory at `dtype` but written at `save_dtype`;
         # size the check by the larger of the footprints actually incurred
-        itemsizes = []
+        triad_gb = (self._n_mode_comp * int(np.prod(self._mode_shape))
+                    * B2GB)
+        footprints = []
         if self._store_modes:
-            itemsizes.append(self._complex(1).nbytes)
+            footprints.append(
+                self.n_triads * self._complex(1).nbytes * triad_gb)
         if self._save_modes:
-            itemsizes.append(self._save_complex(1).nbytes)
-        self._modes_size_gb = (self._n_mode_comp * self.n_triads
-                               * int(np.prod(self._mode_shape))
-                               * max(itemsizes, default=0) * B2GB)
+            footprints.append(
+                self._n_saved_triads * self._save_complex(1).nbytes * triad_gb)
+        self._modes_size_gb = max(footprints, default=0.0)
         if (self._max_modes_gb is not None
                 and self._modes_size_gb > self._max_modes_gb):
             raise ValueError(
@@ -546,12 +580,15 @@ class Base():
         q_blk_hat = (self._win_weight / self._n_dft) * np.fft.fft(q_blk, axis=0)
         return np.fft.fftshift(q_blk_hat, axes=0), offset
 
-    def _compute_qhat(self):
+    def _compute_qhat(self, needed=None):
         '''
         Fourier realizations for every frequency row any triad refers to.
 
         Only the rows in ``triads.freq_needed`` are retained; for a bispectrum
         restricted by ``max_freq_idx`` that is a small fraction of ``n_dft``.
+
+        :param needed: frequency rows to retain instead, as used by
+            :meth:`reconstruct_modes`. Default is ``triads.freq_needed``.
 
         :return: mapping from frequency row to its ``(*block_shape, n_blocks)``
             array of realizations, ``block_shape`` being :meth:`_block_shape`.
@@ -562,7 +599,8 @@ class Base():
         self._pr0(f'------------------------------------')
 
         block_shape = self._block_shape()
-        needed = self._triads.freq_needed
+        if needed is None:
+            needed = self._triads.freq_needed
         q_hat = {int(f): np.empty((*block_shape, self._n_blocks),
                                  dtype=self._complex) for f in needed}
         for i_blk in range(0, self._n_blocks):
@@ -594,6 +632,9 @@ class Base():
         L = np.zeros((n_freq, n_freq), dtype=self._complex)
         T = np.zeros((n_freq, n_freq), dtype=self._float)
         coeffs = np.zeros((n_triads, self._n_blocks), dtype=self._complex)
+        # with save_modes_top the modes to write are known only once L is
+        # complete, so they are written after the reduction instead
+        save_in_loop = self._save_modes and self._save_modes_top is None
         if self._store_modes:
             self._modes = np.zeros(
                 (n_triads, self._n_mode_comp, *self._mode_shape),
@@ -626,19 +667,12 @@ class Base():
                     np.real(np.vdot(psi_sum, psi_prod)) / self._n_blocks
             coeffs[i, :] = a
 
-            if self._store_modes or self._save_modes:
-                mode_stack = [utils_bmd.normalize_mode(psi_sum, weights),
-                             utils_bmd.normalize_mode(psi_prod, weights)]
-                if self._constituent_modes:
-                    q_k, q_l = self._constituent_matrices(q_hat, i)
-                    mode_stack.append(
-                        utils_bmd.normalize_mode(q_k @ a, weights))
-                    mode_stack.append(
-                        utils_bmd.normalize_mode(q_l @ a, weights))
-                psi = self._unflatten_modes(np.stack(mode_stack))
+            if self._store_modes or save_in_loop:
+                psi = self._triad_modes(q_hat, i, a, psi_sum, psi_prod,
+                                        weights)
                 if self._store_modes:
                     self._modes[i] = psi
-                if self._save_modes:
+                if save_in_loop:
                     self._save_modes_at_triad(i, psi)
 
             if n % 100 == 0 or n == my_triads.size - 1:
@@ -662,7 +696,106 @@ class Base():
         self._T[outside] = np.nan
         if not self._compute_transfer:
             self._T[:] = np.nan
+
+        if self._save_modes and self._save_modes_top is not None:
+            self._save_top_modes(q_hat, my_triads)
         utils_par.barrier(self._comm)
+
+    def _triad_modes(self, q_hat, i, a, psi_sum, psi_prod, weights):
+        '''The normalized modes ``(n_comp, *mode_shape)`` of triad ``i`` for
+        the expansion vector ``a``.'''
+        mode_stack = [utils_bmd.normalize_mode(psi_sum, weights),
+                      utils_bmd.normalize_mode(psi_prod, weights)]
+        if self._constituent_modes:
+            q_k, q_l = self._constituent_matrices(q_hat, i)
+            mode_stack.append(utils_bmd.normalize_mode(q_k @ a, weights))
+            mode_stack.append(utils_bmd.normalize_mode(q_l @ a, weights))
+        return self._unflatten_modes(np.stack(mode_stack))
+
+    def _save_top_modes(self, q_hat, my_triads):
+        '''
+        Write the modes of the ``save_modes_top`` strongest triads, ranked as
+        :func:`~pybmd.bmd.postproc.top_triads` ranks them, and their indices
+        to ``modes/saved_triad_idx.npy``. Each rank writes the triads it
+        owns, rebuilding the modes from ``q_hat`` and the reduced ``coeffs``.
+        '''
+        saved = np.sort(postproc.top_triads(
+            self, n=self._n_saved_triads)['triad_idx'])
+        for i in np.intersect1d(saved, my_triads):
+            i = int(i)
+            psi = (self._modes[i] if self._store_modes
+                   else self._modes_from_coeffs(q_hat, i))
+            self._save_modes_at_triad(i, psi)
+        if self._rank == 0:
+            np.save(os.path.join(self._modes_dir, 'saved_triad_idx.npy'),
+                    saved)
+        self._saved_triad_idx = saved
+
+    def _modes_from_coeffs(self, q_hat, i):
+        '''The modes of triad ``i`` rebuilt from ``q_hat`` and the reduced
+        ``coeffs``, identical to those formed in the triad loop.'''
+        q_sum, q_prod, weights = self._triad_matrices(q_hat, i)
+        a = self._coeffs[i]
+        return self._triad_modes(q_hat, i, a, q_sum @ a, q_prod @ a, weights)
+
+    def reconstruct_modes(self, data_list, triad_idx):
+        '''
+        Rebuild the modes of triads whose modes were not saved, from the data
+        and ``coeffs``, without re-running the optimizer.
+
+        Only the DFT rows of the requested triads are recomputed, by the same
+        blocking, window and mean as :meth:`fit`, so the result is identical to
+        the modes ``fit`` would have saved (at the computation ``dtype``, not
+        ``save_dtype``). Must be called on the fitted object.
+
+        :param data_list: the data passed to :meth:`fit`, or path(s) to it.
+        :param triad_idx: an index into the per-triad arrays, as returned by
+            ``self.triads.find(k, l)``, or a sequence of them.
+
+        :return: the modes of shape ``(n_comp, *mode_shape)`` for one index,
+            or ``(len(triad_idx), n_comp, *mode_shape)`` for a sequence. See
+            :meth:`get_modes_at_triad` for ``n_comp`` and the index order.
+        :rtype: numpy.ndarray
+        '''
+        if not hasattr(self, '_coeffs'):
+            raise RuntimeError('reconstruct_modes needs a fitted object; '
+                               'call fit() first.')
+        scalar = np.ndim(triad_idx) == 0
+        idx = np.atleast_1d(np.asarray(triad_idx, dtype=int))
+        if idx.size and (idx.min() < 0 or idx.max() >= self.n_triads):
+            raise IndexError(
+                f'triad_idx must be in [0, {self.n_triads}); got {triad_idx}.')
+
+        data = utils_io.get_data_array(
+            data_list, self._xdim, self._nv, dtype=self._float)
+        if data.shape != self._shape:
+            raise ValueError(
+                f'data has shape {data.shape}, but fit() was run on '
+                f'{self._shape}; pass the same data.')
+        t = self._triads
+        needed = np.unique(np.concatenate(
+            [t.f1_idx[idx], t.f2_idx[idx], t.f3_idx[idx]]))
+        # _compute_blocks reads self.data, which fit() deletes after the DFT
+        self.data = data
+        try:
+            q_hat = self._compute_qhat(needed)
+        finally:
+            del self.data
+        psi = np.stack([self._modes_from_coeffs(q_hat, int(i)) for i in idx])
+        return psi[0] if scalar else psi
+
+    def _resolve_save_modes_top(self):
+        '''Number of triads whose modes are written: every triad, or
+        ``save_modes_top`` of the candidates ranked by ``top_triads`` (those
+        with ``k != 0`` and ``l != 0``).'''
+        top = self._save_modes_top
+        if top is None:
+            return self.n_triads
+        n_cand = int(np.count_nonzero(
+            (self._triads.k != 0) & (self._triads.l != 0)))
+        if isinstance(top, float):
+            return min(math.ceil(top * n_cand), n_cand)
+        return min(top, n_cand)
 
     def _save_modes_at_triad(self, i_triad, psi):
         '''Write the modes ``(n_comp, *mode_shape)`` of one triad to
@@ -670,12 +803,16 @@ class Base():
         path = os.path.join(self._modes_dir, f'triad_idx_{i_triad:08d}.npy')
         np.save(path, self._to_save_dtype(psi))
 
-    def get_modes_at_triad(self, triad_idx):
+    def get_modes_at_triad(self, triad_idx, data=None):
         '''
         Load the modes of one triad.
 
         :param int triad_idx: index into the per-triad arrays, as returned by
             ``self.triads.find(k, l)``.
+        :param data: the data passed to :meth:`fit`, or path(s) to it. If
+            given, modes that were not saved (``save_modes=False``, or outside
+            ``save_modes_top``) are rebuilt with :meth:`reconstruct_modes`
+            instead of raising. Default is None.
 
         :return: the modes, of shape ``(n_comp, *xshape, nv)`` (``n_state`` in
             place of ``nv`` for :class:`~pybmd.bmd.cross.Cross`). ``n_comp`` is
@@ -689,24 +826,35 @@ class Base():
         if self._store_modes:
             return self._modes[triad_idx]
         path = os.path.join(self._modes_dir, f'triad_idx_{triad_idx:08d}.npy')
-        if not os.path.exists(path):
+        not_top = (self._save_modes and self._save_modes_top is not None
+                   and triad_idx not in self._saved_triad_idx)
+        if not not_top and os.path.exists(path):
+            return np.load(path)
+        if data is not None:
+            return self.reconstruct_modes(data, triad_idx)
+        if not_top:
             raise FileNotFoundError(
-                f'No modes stored for triad {triad_idx}. Was fit() run with '
-                f'save_modes enabled?')
-        return np.load(path)
+                f'Triad {triad_idx} is not among the '
+                f'{self._n_saved_triads} strongest triads written with '
+                f'save_modes_top={self._save_modes_top!r}; see '
+                f'modes/saved_triad_idx.npy, or pass data= to rebuild it.')
+        raise FileNotFoundError(
+            f'No modes stored for triad {triad_idx}. Was fit() run with '
+            f'save_modes enabled? Pass data= to rebuild them.')
 
-    def get_modes_at_freqs(self, k, l):
+    def get_modes_at_freqs(self, k, l, data=None):
         '''
         Load the modes of the triad ``(k, l, k+l)``.
 
         :param int k: integer frequency index of f1.
         :param int l: integer frequency index of f2.
+        :param data: see :meth:`get_modes_at_triad`.
 
         :return: the modes, of shape ``(n_comp, *xshape, nv)``. See
             :meth:`get_modes_at_triad` for ``n_comp`` and the index order.
         :rtype: numpy.ndarray
         '''
-        return self.get_modes_at_triad(self._triads.find(k, l))
+        return self.get_modes_at_triad(self._triads.find(k, l), data=data)
 
     def find_triad(self, k, l):
         '''See :meth:`pybmd.bmd.utils.Triads.find`.'''
@@ -774,6 +922,8 @@ class Base():
         self._pr0(f'Q_hat size               : {self._qhat_size_gb:.2f} GB')
         self._pr0(f'Modes size (all triads)  : {self._modes_size_gb:.2f} GB')
         self._pr0(f'Constituent modes        : {self._constituent_modes}')
+        self._pr0(f'Triads with saved modes  : {self._n_saved_triads}'
+                  f'{"" if self._save_modes else " (save_modes off)"}')
         self._pr0(f'Data type for real       : {self._float}')
         self._pr0(f'Data type for complex    : {self._complex}')
         self._pr0(f'Data type on disk        : {self._save_dtype}')

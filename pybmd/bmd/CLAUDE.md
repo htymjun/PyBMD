@@ -34,6 +34,28 @@ YAML failure cannot lose results).
 `q_hat` is a **dict keyed by global frequency row**, holding only `triads.freq_needed` — the rows
 some triad actually references. With `max_freq_idx` set that is a small fraction of `n_dft`.
 
+## MPI: triads across ranks, big arrays once per node
+
+The triad loop is split round-robin over all ranks (`distribute_indices`). `data`, `q_hat` and
+(with `store_modes`) `modes` are **not** per rank: they live once per node in MPI-3 shared memory
+(`utils/parallel.py`: `node_comm`, `shared_empty`), so total memory stays near the serial
+footprint whatever the rank count. Only the first rank of each node reads the data
+(`_load_shared`; other ranks may pass `None` to `fit`), and the weights are likewise taken from
+that rank and broadcast (`define_weights`; other ranks may pass `weights=None`). Both go through
+`_on_node_root`, which re-raises a failure on every rank of the node. The weights are small (one
+snapshot), so each rank keeps a private copy; what matters is that every rank has the *same*
+ones — a rank that silently fell back to uniform weights would mix two weightings into `L`. The mean and the DFT are split across the
+ranks of a node by contiguous spatial points (`split_range`, `_my_cols`) — each point's FFT is
+independent, so this needs no communication and stays bit-identical. A node with a single rank
+skips the copy into shared memory for `data`.
+
+- **Shared windows are freed collectively** (`_free_shared`, after the last read of `data` /
+  `q_hat` in `fit`). Never free one while a NumPy view of it may still be used: the access
+  segfaults instead of raising. The `modes` window is deliberately never freed, since callers
+  hold views of `bmd.modes`.
+- **`reconstruct_modes` uses private arrays** (`_compute_qhat(needed, comm=None)`), because it
+  may be called on one rank only; anything collective there deadlocks.
+
 ## Invariants that are easy to break
 
 - **C order everywhere. Never pass `order='F'`.** `L` and `T` are full reductions over space, so
@@ -50,7 +72,8 @@ some triad actually references. With `max_freq_idx` set that is a small fraction
 - **The reduction accumulates into zeros, not NaN.** `NaN + SUM` poisons every rank. The reference's
   NaN-outside-the-triads semantics is restored *after* the `allreduce`, via `triads.mask`.
 - **Determinism is a requirement, not a nicety.** `tests/test_bmd_mpi.py` asserts bit-identical
-  `L`, `T`, `coeffs` and modes between `mpirun -n 1` and `-n 2`. `optimizers.py` contains no RNG at all — Mengi–Overton
+  `L`, `T`, `coeffs` and modes between a serial run (`comm=None`) and `mpirun -n 1`, `-n 2`, `-n 4`
+  (an uneven spatial split of the DFT), for both `Standard` and `Cross`. `optimizers.py` contains no RNG at all — Mengi–Overton
   needs no start vector — so this is structural, not a convention to maintain. Triads are split round-robin because solver cost
   varies in bands across the `f1`-`f2` plane.
 - **`T` carries no weight**, unlike `B`. That is deliberate and matches the reference — don't
@@ -68,9 +91,10 @@ some triad actually references. With `max_freq_idx` set that is a small fraction
   `triad_idx` (never renumber: `coeffs`, `find` and `L` index by it); `modes/saved_triad_idx.npy`
   lists them. An `int` is a count, a `float` in (0, 1] a fraction of the `k != 0`, `l != 0`
   triads, so `1` and `1.0` differ.
-- **`store_modes` costs as much as `save_modes`, on every rank** (the full `(n_triads, n_comp,
-  *mode_shape)` array plus its `allreduce` buffer, `n_comp` being 2 or 4 with
-  `constituent_modes`); the `params['max_modes_gb']` guard (default `MAX_MODES_GB`, 8 GB; `None`
+- **`store_modes` costs as much as `save_modes`, once per node** (the full `(n_triads, n_comp,
+  *mode_shape)` array in shared memory, each rank writing its own triads; across nodes it is
+  summed in place by the first rank of each node, `allreduce_across_nodes`; `n_comp` being 2 or
+  4 with `constituent_modes`); the `params['max_modes_gb']` guard (default `MAX_MODES_GB`, 8 GB; `None`
   disables it) in `base.py` covers both, sizing `save_modes` at `save_dtype` and `store_modes` at
   `dtype`.
 - **`constituent_modes` is a PyBMD addition, not a reference feature.** `bmd.m` allocates

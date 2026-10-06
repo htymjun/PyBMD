@@ -145,6 +145,10 @@ class Base():
         else:
             self._rank = 0
             self._size = 1
+        # the ranks sharing memory with this one: the large arrays are held
+        # once per node, not per rank; see _shared_empty
+        self._node_comm = utils_par.node_comm(comm)
+        self._wins = {}
 
         ## validate eagerly, so a bad configuration fails before any I/O
         if self._n_dft < 4:
@@ -157,12 +161,24 @@ class Base():
         self._window = self._set_dtype(self._window)
         self._resolve_overlap()
 
+    def __getstate__(self):
+        '''
+        Pickle without the MPI handles, which cannot be serialized: the
+        loaded object is serial (``comm=None``), and arrays held in shared
+        memory, such as ``modes``, are restored as private copies.
+        '''
+        state = self.__dict__.copy()
+        state.update(_comm=None, _node_comm=None, _wins={}, _rank=0, _size=1)
+        return state
+
     def fit(self, data_list):
         '''
         Fit the data: initialize, DFT every block, solve every triad, save.
 
         :param data_list: data matrix of shape ``(nt, *xshape, n_variables)``,
-            or path(s) to it.
+            or path(s) to it. Under MPI only the first rank of each node reads
+            it, into memory shared by the ranks of that node; the other ranks
+            ignore it, so they may pass None instead of loading the data.
 
         :return: the fitted object.
         '''
@@ -173,14 +189,16 @@ class Base():
         self._pr0(f'Time to initialize: {time.time() - start} s.')
 
         start = time.time()
-        q_hat = self._compute_qhat()
+        q_hat = self._compute_qhat(comm=self._node_comm)
         self._pr0(f'Time to compute DFT: {time.time() - start} s.')
         del self.data
+        self._free_shared('data')
         utils_par.barrier(self._comm)
 
         start = time.time()
         self._triad_loop(q_hat)
         del q_hat
+        self._free_shared('q_hat')
         self._pr0(f'------------------------------------')
         self._pr0(f'Time to compute {self._label}: {time.time() - start} s.')
 
@@ -407,8 +425,7 @@ class Base():
         self._pr0(f'------------------------------------')
 
         st = time.time()
-        self.data = utils_io.get_data_array(
-            data_list, self._xdim, self._nv, dtype=self._float)
+        self.data = self._load_shared(data_list)
         self._pr0(f'- loaded data into memory: {time.time() - st} s.')
 
         self._shape = self.data.shape
@@ -440,9 +457,19 @@ class Base():
         ## define and check weights
         self.define_weights()
 
-        ## long-time mean, subtracted from every block
+        ## long-time mean, subtracted from every block; each rank of a node
+        ## averages its own spatial points
         st = time.time()
-        self._t_mean = self.long_t_mean(self.data)
+        t_mean = self._shared_empty((self._nxv,), self._float, 't_mean',
+                                    self._node_comm)
+        cols = self._my_cols(self._node_comm)
+        t_mean[cols] = self.long_t_mean(
+            self.data.reshape(self._nt, -1)[:, cols])
+        utils_par.barrier(self._node_comm)
+        # a private copy: reconstruct_modes needs it after fit returns
+        self._t_mean = t_mean.copy()
+        del t_mean
+        self._free_shared('t_mean')
         self._pr0(f'- computed mean: {time.time() - st} s.')
 
         ## flatten weights, in the same C order the data is flattened in
@@ -508,7 +535,7 @@ class Base():
                 and self._modes_size_gb > self._max_modes_gb):
             raise ValueError(
                 f'Keeping all modes would need {self._modes_size_gb:.2f} GB '
-                f'(on disk with save_modes, and on every rank with '
+                f'(on disk with save_modes, and in memory on every node with '
                 f'store_modes), above the limit of {self._max_modes_gb:.2f} '
                 f'GB. Raise params["max_modes_gb"] (None disables the check), '
                 f'set params["save_dtype"] to "single", or set '
@@ -520,22 +547,30 @@ class Base():
         self._post_initialize()
 
     def define_weights(self):
-        '''Define and check weights.'''
+        '''
+        Define and check weights. Under MPI, like the data, they are taken
+        from the first rank of each node and broadcast to the others, whose
+        own ``weights`` argument is ignored: every triad must see the same
+        weights, whichever rank solves it.
+        '''
         self._pr0('- checking weight dimensions')
+        self._weights, self._weights_name = self._on_node_root(
+            self._resolve_weights)
+
+    def _resolve_weights(self):
+        '''The weights and their name, from the ``weights`` argument.'''
         expected = self._expected_weights_shape()
         if isinstance(self._weights_tmp, dict):
-            self._weights = np.asarray(self._weights_tmp['weights'])
-            self._weights_name = self._weights_tmp['weights_name']
-            self._check_weights_shape(expected)
-        else:
-            if self._weights_tmp is not None and self._rank == 0:
-                warnings.warn(
-                    'Parameter `weights` is not a dict as returned by '
-                    'pybmd.utils.weights; using default uniform weighting.')
-            self._weights = np.ones(expected)
-            self._weights_name = 'uniform'
+            weights = np.asarray(self._weights_tmp['weights'])
+            self._check_weights_shape(weights, expected)
+            return weights, self._weights_tmp['weights_name']
+        if self._weights_tmp is not None:
+            warnings.warn(
+                'Parameter `weights` is not a dict as returned by '
+                'pybmd.utils.weights; using default uniform weighting.')
+        return np.ones(expected), 'uniform'
 
-    def _check_weights_shape(self, expected):
+    def _check_weights_shape(self, weights, expected):
         '''
         Require the full spatial shape rather than a flat vector.
 
@@ -545,9 +580,9 @@ class Base():
         reduction over space and so is insensitive to the permutation, while
         the modes come out scrambled. Requiring the shape removes the ambiguity.
         '''
-        if self._weights.shape != tuple(expected):
+        if weights.shape != tuple(expected):
             raise ValueError(
-                f'weights have shape {self._weights.shape} but '
+                f'weights have shape {weights.shape} but '
                 f'{tuple(expected)} is required. Pass an array with the full '
                 f'spatial shape rather than a flattened vector, so that it is '
                 f'unambiguous which weight belongs to which grid point.')
@@ -557,14 +592,16 @@ class Base():
         t_mean = np.mean(data, axis=0)
         return self._set_dtype(np.reshape(t_mean, [-1]))
 
-    def _get_block(self, i_blk):
-        '''Snapshots of block ``i_blk``, flattened to ``(n_dft, nxv)``.'''
+    def _get_block(self, i_blk, cols=slice(None)):
+        '''Snapshots of block ``i_blk``, flattened to ``(n_dft, nxv)``, at
+        the flat spatial columns ``cols``.'''
         offset = min(i_blk * (self._n_dft - self._n_overlap) + self._n_dft,
                      self._nt) - self._n_dft
-        q_blk = self.data[offset:offset + self._n_dft].copy()
-        return q_blk.reshape(self._n_dft, -1), offset
+        q_blk = self.data.reshape(self._nt, -1)[offset:offset + self._n_dft,
+                                                cols].copy()
+        return q_blk, offset
 
-    def _compute_blocks(self, i_blk):
+    def _compute_blocks(self, i_blk, cols=slice(None)):
         '''
         Windowed, mean-subtracted DFT of one block.
 
@@ -572,15 +609,15 @@ class Base():
         ``f2`` and ``f1 + f2``, and the difference-interaction regions need
         negative frequencies. There is therefore no real-signal ``rfft`` path.
         '''
-        q_blk, offset = self._get_block(i_blk)
-        q_blk = q_blk - self._t_mean
+        q_blk, offset = self._get_block(i_blk, cols)
+        q_blk = q_blk - self._t_mean[cols]
 
         q_blk = q_blk * self._window
         q_blk = self._set_dtype(q_blk)
         q_blk_hat = (self._win_weight / self._n_dft) * np.fft.fft(q_blk, axis=0)
         return np.fft.fftshift(q_blk_hat, axes=0), offset
 
-    def _compute_qhat(self, needed=None):
+    def _compute_qhat(self, needed=None, comm=None):
         '''
         Fourier realizations for every frequency row any triad refers to.
 
@@ -589,6 +626,10 @@ class Base():
 
         :param needed: frequency rows to retain instead, as used by
             :meth:`reconstruct_modes`. Default is ``triads.freq_needed``.
+        :param comm: node communicator. With one, ``q_hat`` is held once in
+            the node's shared memory and every rank transforms its own share
+            of the spatial points; ``self.data`` must then be shared too.
+            Default is None (private arrays, all points on this rank).
 
         :return: mapping from frequency row to its ``(*block_shape, n_blocks)``
             array of realizations, ``block_shape`` being :meth:`_block_shape`.
@@ -601,18 +642,92 @@ class Base():
         block_shape = self._block_shape()
         if needed is None:
             needed = self._triads.freq_needed
-        q_hat = {int(f): np.empty((*block_shape, self._n_blocks),
-                                 dtype=self._complex) for f in needed}
+        # one shared allocation for every row; q_hat maps a row to its view
+        q_all = self._shared_empty(
+            (len(needed), *block_shape, self._n_blocks), self._complex,
+            'q_hat', comm)
+        q_hat = {int(f): q_all[j] for j, f in enumerate(needed)}
+        # each row viewed as (nxv, n_blocks), whatever its block_shape
+        q_flat = {f: q.reshape(self._nxv, self._n_blocks)
+                  for f, q in q_hat.items()}
+        cols = self._my_cols(comm)
         for i_blk in range(0, self._n_blocks):
             st = time.time()
-            q_blk_hat, offset = self._compute_blocks(i_blk)
+            q_blk_hat, offset = self._compute_blocks(i_blk, cols)
             for f in needed:
-                q_hat[int(f)][..., i_blk] = q_blk_hat[f].reshape(block_shape)
+                q_flat[int(f)][cols, i_blk] = q_blk_hat[f]
             self._pr0(f'block {i_blk + 1}/{self._n_blocks} '
                       f'({offset}:{self._n_dft + offset});  '
                       f'Elapsed time: {time.time() - st} s.')
+        utils_par.barrier(comm)
         self._pr0(f'------------------------------------')
         return q_hat
+
+    def _my_cols(self, comm):
+        '''The flat ``(nxv,)`` columns of this rank's share of the spatial
+        points: all variables of a contiguous range of points.'''
+        start, stop = utils_par.split_range(self._nx, comm)
+        return slice(start * self._nv, stop * self._nv)
+
+    def _shared_empty(self, shape, dtype, key, comm):
+        '''An array held once in the shared memory of the node communicator
+        ``comm`` (private if None); its window is kept under ``key`` until
+        :meth:`_free_shared`.'''
+        arr, win = utils_par.shared_empty(shape, dtype, comm)
+        if win is not None:
+            self._wins.setdefault(key, []).append(win)
+        return arr
+
+    def _free_shared(self, key):
+        '''Release the shared windows under ``key``; every array mapping
+        them must have been dropped.'''
+        for win in self._wins.pop(key, []):
+            utils_par.free_shared(win, self._node_comm)
+
+    def _load_shared(self, data_list):
+        '''
+        Read the data on the first rank of each node, into memory shared by
+        the ranks of that node. Serial, or alone on the node, the data is
+        returned as read, without the copy into shared memory.
+        '''
+        node = self._node_comm
+        if node is None or node.size == 1:
+            return utils_io.get_data_array(
+                data_list, self._xdim, self._nv, dtype=self._float)
+        loaded = []
+
+        def read():
+            loaded.append(utils_io.get_data_array(
+                data_list, self._xdim, self._nv, dtype=self._float))
+            return loaded[0].shape
+
+        shape = self._on_node_root(read)
+        shared = self._shared_empty(shape, self._float, 'data', node)
+        if loaded:
+            shared[...] = loaded.pop()
+        utils_par.barrier(node)
+        return shared
+
+    def _on_node_root(self, func):
+        '''
+        Call ``func()`` on the first rank of each node only and broadcast its
+        result to the other ranks of the node, so that an input given on that
+        rank alone is seen by all. An exception it raises is re-raised on
+        every rank of the node, rather than leaving the others waiting.
+        '''
+        node = self._node_comm
+        if node is None:
+            return func()
+        result = None
+        if node.rank == 0:
+            try:
+                result = func()
+            except Exception as err:
+                result = err
+        result = node.bcast(result, root=0)
+        if isinstance(result, Exception):
+            raise result
+        return result
 
     def _triad_loop(self, q_hat):
         '''
@@ -636,9 +751,14 @@ class Base():
         # complete, so they are written after the reduction instead
         save_in_loop = self._save_modes and self._save_modes_top is None
         if self._store_modes:
-            self._modes = np.zeros(
+            # once per node, each rank writing the rows of its own triads;
+            # the window is never freed: the caller may still hold a view of
+            # self.modes, so it lives until MPI finalizes
+            self._modes, win = utils_par.shared_zeros(
                 (n_triads, self._n_mode_comp, *self._mode_shape),
-                dtype=self._complex)
+                self._complex, self._node_comm)
+            if win is not None:
+                self._wins.setdefault('modes', []).append(win)
 
         my_triads = utils_par.distribute_indices(n_triads, self._comm)
         st = time.time()
@@ -688,7 +808,8 @@ class Base():
         self._T = utils_par.allreduce(T, self._comm)
         self._coeffs = utils_par.allreduce(coeffs, self._comm)
         if self._store_modes:
-            self._modes = utils_par.allreduce(self._modes, self._comm)
+            utils_par.allreduce_across_nodes(self._modes, self._comm,
+                                             self._node_comm)
 
         # restore the reference semantics: entries that are not triads are NaN
         outside = ~self._triads.mask
@@ -778,7 +899,9 @@ class Base():
         # _compute_blocks reads self.data, which fit() deletes after the DFT
         self.data = data
         try:
-            q_hat = self._compute_qhat(needed)
+            # private, on this rank alone: reconstruct_modes need not be
+            # called collectively
+            q_hat = self._compute_qhat(needed, comm=None)
         finally:
             del self.data
         psi = np.stack([self._modes_from_coeffs(q_hat, int(i)) for i in idx])
@@ -888,9 +1011,11 @@ class Base():
             path_params = os.path.join(self._savedir_sim, 'params_modes.yaml')
             with open(path_params, 'w') as f:
                 yaml.dump(_yaml_safe(self._params), f)
-            print(f'Parameters dictionary saved in: {path_params}')
+            print(f'Parameters dictionary saved in: {path_params}',
+                  flush=True)
             print(f'Bispectrum saved in: '
-                  f'{os.path.join(self._savedir_sim, "bispectrum.npz")}')
+                  f'{os.path.join(self._savedir_sim, "bispectrum.npz")}',
+                  flush=True)
         utils_par.barrier(self._comm)
 
     def _pr0(self, string):

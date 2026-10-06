@@ -9,7 +9,8 @@ associated with it, distinguishing sum- from difference-interactions and produci
 maps that identify the regions of nonlinear coupling.
 
 The architecture follows [PySPOD](https://github.com/MathEXLab/PySPOD): a `params`-dict-driven
-`Base`/`Standard` class pair, an optional MPI communicator and disk-backed mode storage.
+`Base`/`Standard` class pair, an optional MPI communicator (with node-shared memory) and
+disk-backed mode storage.
 
 ```
           f2 or l
@@ -102,12 +103,35 @@ plot_triad_modes(bmd.get_modes_at_triad(int(top[0]['triad_idx'])),
                  int(top[0]['k']), int(top[0]['l']), x=x, y=y)
 ```
 
-Running in parallel — the triad loop is distributed across ranks and results are identical to a
-serial run:
+Running in parallel — the triads are distributed across ranks, and the data, its Fourier
+realizations and any stored modes are held **once per node** in shared memory, with the DFT split
+across the ranks of the node. Total memory therefore stays close to that of a serial run whatever
+the number of ranks, and results are bit-identical to a serial run:
+
+```python
+from mpi4py import MPI
+comm = MPI.COMM_WORLD
+# the data and the weights are taken from the first rank of each node and the
+# others may pass None: on a single node, give them on rank 0 alone. Passing a
+# file path on every rank also works on several nodes, since only those first
+# ranks read it.
+root = comm.rank == 0
+data = load_my_data() if root else None
+weights = utils_weights.trapz_2d(x, y, n_vars=2) if root else None
+bmd = Standard(params=params, weights=weights, comm=comm).fit(data)
+```
 
 ```bash
-mpirun -n 8 python my_script.py     # pass comm=MPI.COMM_WORLD to the constructor
+OMP_NUM_THREADS=1 mpirun -n 8 python my_script.py
 ```
+
+Loading the array on every rank still works, but each rank then keeps its own copy outside
+PyBMD. Whatever the other ranks pass as `data` or `weights` is ignored, so every triad is computed
+with the weights of the first rank, whichever rank solves it. The shared memory lives in
+`/dev/shm`, which must be large enough for the data plus its Fourier realizations (check with
+`df -h /dev/shm`). Every rank ends up with the same results, so save the fitted object on one
+rank (`if comm.rank == 0: pickle.dump(bmd, f)`); the MPI handles are dropped when pickling, and
+the loaded object is serial.
 
 Cross-BMD, for a quadratic term built from different variables:
 
@@ -197,9 +221,9 @@ pytest -m "not slow and not mpi"  # fast subset, ~30 s
 ```
 
 The suite checks the numerical-radius solvers against brute force, reproduces Schmidt (2020)'s
-hypothesis test on surrogate data, asserts bit-identical results between `mpirun -n 1` and `-n 2`,
-and regresses `L`, `T`, the modes and CBMD against the original MATLAB implementation run live
-under Octave on the cylinder-wake dataset (see [`tests/CLAUDE.md`](tests/CLAUDE.md)).
+hypothesis test on surrogate data, asserts bit-identical results between a serial run and
+`mpirun -n 1`, `-n 2` and `-n 4`, and regresses `L`, `T`, the modes and CBMD against the
+original MATLAB implementation run live under Octave on the cylinder-wake dataset (see [`tests/CLAUDE.md`](tests/CLAUDE.md)).
 
 ## References
 

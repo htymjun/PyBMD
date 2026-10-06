@@ -18,7 +18,7 @@ def read_data(data_file, comm=None):
     _, format = splitext(data_file)
     format = format.lower().lstrip('.')
     if comm is not None and comm.rank == 0:
-        print(f'reading data with format: {format}')
+        print(f'reading data with format: {format}', flush=True)
     if format == 'mat':
         return _read_mat(data_file)
     raise ValueError(f'{format} format not supported; only .mat is')

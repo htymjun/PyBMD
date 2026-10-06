@@ -31,10 +31,14 @@ python -m pyflakes pybmd/ tests/ examples/   # only linter used; ignore the
 even if a non-editable `pybmd` is installed in site-packages; still prefer the editable install
 above so that scripts and the examples see the same code.
 
-The MPI test (`tests/test_bmd_mpi.py`, marker `mpi`) launches `mpirun -n 1` and `-n 2` itself and
-asserts **bit-identical** `L`, `T`, `coeffs` and modes between them; it self-skips without `mpirun`
+The MPI test (`tests/test_bmd_mpi.py`, marker `mpi`) runs serially and under `mpirun -n 1`, `-n 2`
+and `-n 4` itself, for both `Standard` and `Cross`, and asserts **bit-identical** `L`, `T`, `coeffs`
+and modes between them; it self-skips without `mpirun`
 or `mpi4py`. It sets `OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1` for its subprocesses — threaded
 BLAS reorders reductions — so set the same when comparing MPI runs by hand.
+Under MPI the data, `q_hat` and stored modes are held once per node in shared memory, and only the
+first rank of each node reads the data, so other ranks may pass `None` to `fit` (see
+`pybmd/bmd/CLAUDE.md`).
 
 Examples run from any directory (the fixture path is resolved relative to `examples/data.py`):
 `MPLBACKEND=Agg python examples/example1_cylinder.py`; they write `example*_out/` in the working

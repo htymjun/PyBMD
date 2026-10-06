@@ -14,8 +14,9 @@ Four layers, from solver to paper:
   flat, the peak survives unit-SNR noise, and the modes recover the travelling waves. Four fits
   are memoized across the module.
 - `test_bmd_mpi.py` (marker `mpi`, self-skips without `mpirun`/`mpi4py`): bit-identical `L`, `T`,
-  `coeffs` and every mode file between `mpirun -n 1` and `-n 2`, through `tests/mpi_fit.py`; its
-  helper also checks `allreduce` on a big-endian buffer.
+  `coeffs` and every mode file between a serial run and `mpirun -n 1`, `-n 2`, `-n 4`, for
+  `Standard` and `Cross`, through `tests/mpi_fit.py` (only rank 0 passes the data); its helper
+  also checks `allreduce` on a big-endian buffer.
 - `test_octave_reference.py` (marker `slow`): the reference `refs/bmd/bmd.m`/`cbmd.m` run live
   under Octave, in three tiers — A: `Q_hat` and every per-triad `B` from an instrumented copy,
   isolating the DFT/blocking/weighting stage from the solver; B: `L`, `T` and the modes end to

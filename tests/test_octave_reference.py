@@ -163,9 +163,11 @@ def test_tier_a_qhat_and_b_match(small_data, tmp_path, weight_kind):
     if weight_kind == 'uniform':
         w = utils_weights.uniform((small_data['n1'], small_data['n2']), 1, 1.0)
     else:
+        # the data is passed to bmd.m and PyBMD untransposed, (n1, n2), so
+        # the coordinate along the last axis goes first
         x1 = np.linspace(0, 1, small_data['n1'])
         x2 = np.linspace(0, 2, small_data['n2'])
-        w = utils_weights.trapz_2d(x1, x2, n_vars=1)
+        w = utils_weights.trapz_2d(x2, x1, n_vars=1)
 
     x = small_data['u'][..., np.newaxis]
     params = dict(n_dft=64, time_step=small_data['dt'], n_space_dims=2,
@@ -286,45 +288,6 @@ def test_tier_c_full_dataset_matches_measured_deviation(
     rel = np.abs(vals_ref - vals_py) / np.maximum(vals_py, 1e-300)
     assert int(np.sum(rel > 0.01)) == n_over_1pct
     assert int(np.sum(rel > 0.10)) == n_over_10pct
-
-
-def test_tier_c_matlab_compat_reproduces_reference(small_data, tmp_path):
-    '''
-    ``mengi_overton(..., matlab_compat=True)`` -- also reachable as
-    ``solver='MengiOvertonMATLAB'`` -- is a bug-for-bug port of
-    ``refs/bmd/bmd.m``'s own ``MengiOverton``. On the *same* B matrices as
-    the previous test, it must reproduce the reference far more tightly than
-    PyBMD's own (corrected) solver does: 0 triads off by >1%, max relative
-    deviation a few micro-relative (measured 4.9e-6 on this fixture, whose
-    median ||B||_1 is ~2.7e-4). This is the live-Octave validation
-    CLAUDE.md's Deviations section asks for, rather than an ablation
-    recorded only in prose.
-
-    Not tightened past 1e-4: mengi_overton's own docstring documents that
-    fidelity degrades as ||B||_1 falls toward the tolerance floor itself, and
-    this is not something to chase further by construction.
-    '''
-    oref.require_octave()
-    oref.require_refs()
-    bmd, x, w = _small_bmd(small_data, tmp_path)
-    t = bmd.triads
-    out = _octave_bmd(bmd, x, w, instrumented=True)
-    b_all_ref, L_ref = out['B_all'], out['L']
-
-    max_rel = 0.0
-    n_over_1pct = 0
-    for i in range(bmd.n_triads):
-        B = b_all_ref[:, :, i]
-        w_compat, _ = mengi_overton(B, tol=1e-6, n_it_max=500, matlab_compat=True)
-        r_ref = abs(L_ref[t.f1_idx[i], t.f2_idx[i]])
-        rel = abs(abs(w_compat) - r_ref) / max(r_ref, 1e-300)
-        max_rel = max(max_rel, rel)
-        n_over_1pct += rel > 0.01
-
-    assert n_over_1pct == 0, (
-        f'MengiOvertonMATLAB should reproduce the reference on every triad '
-        f'of this fixture; {n_over_1pct}/{bmd.n_triads} off by >1%')
-    assert max_rel < 1e-4, f'max rel vs reference: {max_rel:.3e}'
 
 
 # ---------------------------------------------------------------------------

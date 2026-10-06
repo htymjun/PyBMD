@@ -62,7 +62,7 @@ def fit_case(name, freqs, snr=None, save_dir='example4_out',
     q, x, k = surrogate_waves(freqs, seed=0, snr=snr)
     params = dict(
         n_dft=128, time_step=1.0, n_space_dims=1, n_variables=1, overlap=0,
-        window='hann', regions=[1], solver='MengiOverton', save_modes=False,
+        window='hann', regions=[1], save_modes=False,
         store_modes=store_modes, savedir=os.path.join(save_dir, name))
     params.update(overrides)
     w = utils_weights.uniform((x.size,), n_vars=1, dV=x[1] - x[0])

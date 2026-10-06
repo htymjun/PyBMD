@@ -5,35 +5,23 @@ from os.path import splitext
 import numpy as np
 
 
-def read_data(data_file, format=None, comm=None):
+def read_data(data_file, comm=None):
     '''
-    Read a data file in one of the supported formats.
+    Read a ``.mat`` data file.
 
     :param str data_file: path to the data file.
-    :param str format: format to read. Default is inferred from the extension.
     :param MPI.Comm comm: parallel communicator. Default is None.
 
-    :return: the data: an array for ``.npy``, a dict of arrays for ``.npz``
-        and ``.mat``, an ``xarray.Dataset`` for ``.nc``.
-    :rtype: numpy.ndarray or dict or xarray.Dataset
+    :return: the variables of the file, as a dict of arrays.
+    :rtype: dict
     '''
-    if not format:
-        _, format = splitext(data_file)
+    _, format = splitext(data_file)
     format = format.lower().lstrip('.')
     if comm is not None and comm.rank == 0:
         print(f'reading data with format: {format}')
-    if format == 'npy':
-        return np.load(data_file)
-    if format == 'npz':
-        with np.load(data_file) as d:
-            return {k: d[k] for k in d.files}
     if format == 'mat':
         return _read_mat(data_file)
-    if format == 'nc':
-        import xarray as xr
-        with xr.open_dataset(data_file) as ds:
-            return ds.load()
-    raise ValueError(f'{format} format not supported')
+    raise ValueError(f'{format} format not supported; only .mat is')
 
 
 def _from_matlab_hdf5(arr):
@@ -70,8 +58,7 @@ def _read_mat(data_file):
 def _as_array(obj):
     '''
     Coerce what :func:`read_data` returns into a single array: an array is
-    passed through, a dict (``.npz``/``.mat``) or ``xarray.Dataset`` must hold
-    exactly one array variable, an ``xarray.DataArray`` gives its values.
+    passed through, a dict (``.mat``) must hold exactly one array variable.
     '''
     if isinstance(obj, np.ndarray):
         return obj
@@ -83,15 +70,6 @@ def _as_array(obj):
         raise ValueError(
             f'the file holds {len(arrays)} array variables '
             f'{sorted(arrays)}; load it and pass the data array directly.')
-    if hasattr(obj, 'data_vars'):   # xarray.Dataset
-        names = list(obj.data_vars)
-        if len(names) != 1:
-            raise ValueError(
-                f'the dataset holds {len(names)} variables {names}; select '
-                f'one and pass its array directly.')
-        obj = obj[names[0]]
-    if hasattr(obj, 'dims') and hasattr(obj, 'values'):   # xarray.DataArray
-        return np.asarray(obj.values)
     return np.asarray(obj)
 
 

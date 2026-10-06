@@ -12,13 +12,13 @@ PyBMD のどのコードに対応するかという観点で整理した文書�
 
 | 理論のステップ | 数式（概略） | 実装 |
 | --- | --- | --- |
-| 1. 変動成分をとる | $q' = q - \bar q$ | [base.py:513](../pybmd/bmd/base.py#L513) `select_mean`, [base.py:566](../pybmd/bmd/base.py#L566) |
+| 1. 変動成分をとる | $q' = q - \bar q$ | [base.py:514](../pybmd/bmd/base.py#L514) `long_t_mean`, [base.py:535](../pybmd/bmd/base.py#L535) |
 | 2. ブロック分割（Welch 法） | $N_\mathrm{blk}$ 個の実現 $q^{[i]}$ | [base.py:399-406](../pybmd/bmd/base.py#L399-L406), [base.py:550](../pybmd/bmd/base.py#L550) `_get_block` |
 | 3. 窓掛け＋時間 DFT | $\hat q^{[i]}_k$ | [base.py:557](../pybmd/bmd/base.py#L557) `_compute_blocks` |
 | 4. トライアド $(k,l,k+l)$ の列挙 | $f_k+f_l=f_{k+l}$ | [utils.py:299](../pybmd/bmd/utils.py#L299) `triad_indices` |
 | 5. 実現行列の組み立て | $\hat Q_{k+l},\ \hat Q_{k\circ l}=\hat Q_k\circ\hat Q_l$ | [standard.py:60](../pybmd/bmd/standard.py#L60) `_triad_matrices` |
 | 6. バイスペクトル密度行列 | $\mathbf B = \hat Q_{k+l}^H \mathbf W \hat Q_{k\circ l}/N_\mathrm{blk}$ | [base.py:646](../pybmd/bmd/base.py#L646) |
-| 7. 数値半径の最大化 | $\mathbf a_1=\arg\max_{\lVert\mathbf a\rVert=1}\lvert\mathbf a^H\mathbf B\mathbf a\rvert$ | [optimizers.py:340](../pybmd/bmd/optimizers.py#L340) `solve` |
+| 7. 数値半径の最大化 | $\mathbf a_1=\arg\max_{\lVert\mathbf a\rVert=1}\lvert\mathbf a^H\mathbf B\mathbf a\rvert$ | [optimizers.py:105](../pybmd/bmd/optimizers.py#L105) `solve` |
 | 8. モード・モードバイスペクトル | $\lambda_1,\ \phi_{k+l},\ \phi_{k\circ l}$ | [base.py:656-679](../pybmd/bmd/base.py#L656-L679) |
 
 呼び出し順は `Base.fit()` → `_initialize` → `_compute_qhat` → `_triad_loop` → `_store_and_save` です
@@ -50,20 +50,15 @@ PyBMD のどのコードに対応するかという観点で整理した文書�
 ### 1.1 データの形
 
 データは常に `(nt, *xshape, n_variables)`、つまり **時間が先頭、変数が末尾** です。
+空間軸は NumPy/matplotlib の画像と同じ並びで、2 次元なら `xshape = (ny, nx)`、3 次元なら `(nz, ny, nx)`（x が最後の空間軸）です。
+MATLAB や Fortran の配列は `(nx, ny)` で保存されているので、転置してから渡します（例: `u.transpose(0, 2, 1)`）。
 内部では各スナップショットを C order で長さ $n = n_x n_v$ のベクトルに平坦化します
 （[base.py:555](../pybmd/bmd/base.py#L555) の `reshape(self._n_dft, -1)`）。
 
 ### 1.2 平均の除去
 
-BMD は変動成分 $q'(\mathbf x,t)=q(\mathbf x,t)-\bar q(\mathbf x)$ の相関を見る手法です。`mean_type` で選びます
-（[base.py:513-543](../pybmd/bmd/base.py#L513-L543)）。
-
-| `mean_type` | 引く量 | 備考 |
-| --- | --- | --- |
-| `'longtime'`（既定） | 全時間平均 $\bar q$ | MATLAB 版の既定と同じ |
-| `'blockwise'` | 各ブロックの時間平均 | [base.py:568](../pybmd/bmd/base.py#L568) |
-| `'zero'`, `'none'` | 何も引かない | 警告が出る |
-| 引数 `mean=` | ユーザ指定の平均 | 形状 `(*xshape, nv)` 必須 |
+BMD は変動成分 $q'(\mathbf x,t)=q(\mathbf x,t)-\bar q(\mathbf x)$ の相関を見る手法です。
+全時間平均 $\bar q$（MATLAB 版の既定と同じ）を各ブロックから引きます（[base.py:514](../pybmd/bmd/base.py#L514) `long_t_mean`）。
 
 ### 1.3 空間内積の重み $\mathbf W$
 
@@ -73,7 +68,7 @@ $$
 $$
 と定義します。$w_j$ は通常、求積（台形則など）の体積要素です。
 
-- 生成: [pybmd/utils/weights.py](../pybmd/utils/weights.py) の `uniform`, `trapz_2d`, `trapz_3d`
+- 生成: [pybmd/utils/weights.py](../pybmd/utils/weights.py) の `uniform`, `trapz_2d`, `trapz_3d`, `curvilinear_2d`（曲線格子）
 - 形状チェック: [base.py:496](../pybmd/bmd/base.py#L496)。平坦ベクトルは受け付けません（並び順の曖昧さでモードが壊れるのを防ぐため）
 - 平坦化: [base.py:424](../pybmd/bmd/base.py#L424)（データと同じ C order）
 
@@ -110,7 +105,7 @@ $$
 - $1/\bar w$ は窓による振幅低下の補正です（`win_weight`、[base.py:428](../pybmd/bmd/base.py#L428)）。
   この規格化により、周波数 $f_k$ で振幅 $A$ の正弦波（窓がその周波数に合っている場合）は $|\hat q_k| = A/2$ になります。
 - DFT と `fftshift`: [base.py:581-582](../pybmd/bmd/base.py#L581-L582)
-- 窓: `'hamming'`（既定）/`'hann'`/`'boxcar'`/任意の配列（[utils.py:76](../pybmd/bmd/utils.py#L76)）
+- 窓: `'hamming'`（既定）/`'hann'`（[utils.py:61](../pybmd/bmd/utils.py#L61)）
 
 **両側スペクトルが必須です。** 差の相互作用（$l<0$）は負の周波数を使うので、`rfft` は使いません。
 
@@ -193,7 +188,7 @@ $\mathbf B$ は次の 2 つの対称性を持ちます。
 2. **実数データの共役対称性**：$\hat q_{-k} = \overline{\hat q_k}$ より $\mathbf B(-k,-l) = \overline{\mathbf B(k,l)}$。したがって $\lambda_1(-k,-l)=\overline{\lambda_1(k,l)}$ です。
 
 この 2 つを使うと、実数データでは領域 1（和の相互作用 $k\ge l\ge 0$）と領域 2（差の相互作用 $k\ge|l|,\ l\le 0$）で平面全体を代表できます。
-**複素数データ**では 2. が成り立たないので、必要に応じて他の領域も指定してください。
+PyBMD は入力を実数に限定しています（複素数は `get_data_array` が `TypeError` で拒否）。
 
 （乱数データで $L(3,2)=L(2,3)$ と $L(-3,-2)=\overline{L(3,2)}$ を数値的に確認済みです。）
 
@@ -288,7 +283,7 @@ $$
 $r(\mathbf B)$ は $\mathbf B$ の**数値半径**（field of values の最大絶対値）です。$\mathbf B$ はエルミートではないので、固有値問題ではなく数値半径の最大化問題になります。
 制約 $\lVert\mathbf a\rVert_2=1$ は $\mathbf W$ を含まない通常のユークリッドノルムです。
 
-- 実装: [base.py:652-655](../pybmd/bmd/base.py#L652-L655) `r, a = optimizers.solve(B, ...)`
+- 実装: [base.py:652-655](../pybmd/bmd/base.py#L652-L655) `r, a = optimizers.mengi_overton(B, ...)`
 - `r` は**複素数** $\lambda_1$ です（絶対値ではありません）。`L` にはこの複素数がそのまま入り、図にするとき $|L|$ をとります（[postproc.py:271](../pybmd/bmd/postproc.py#L271)）。
 
 ### 5.2 数値半径の性質とソルバ
@@ -309,12 +304,10 @@ $$
 
 | 関数 | 理論上の役割 |
 | --- | --- |
-| [optimizers.py:51](../pybmd/bmd/optimizers.py#L51) `max_fov(A, theta)` | $\lambda_{\max}(\mathbf H(\theta))$ |
-| [optimizers.py:95](../pybmd/bmd/optimizers.py#L95) `_dominant_eigvec(A, phi)` | $\mathbf H(\phi)$ の最大固有ベクトル $\mathbf a$ と $\mathbf a^H\mathbf B\mathbf a$ |
-| [optimizers.py:229](../pybmd/bmd/optimizers.py#L229) `mengi_overton` | Mengi & Overton (2005) のレベルセット法。**既定**、大域収束 |
-| [optimizers.py:177](../pybmd/bmd/optimizers.py#L177) `simple_iteration` | Watson の単純反復（論文付録 Algorithm 1）。局所解のみ |
-| [optimizers.py:142](../pybmd/bmd/optimizers.py#L142) `default_start` | 初期ベクトル（$\theta$ の粗い走査。乱数を使わない） |
-| [optimizers.py:107](../pybmd/bmd/optimizers.py#L107) `_pow2_scale` | $\lVert\mathbf B\rVert_1\in(1/2,1]$ への 2 のべき乗スケーリング |
+| [optimizers.py:24](../pybmd/bmd/optimizers.py#L24) `max_fov(A, theta)` | $\lambda_{\max}(\mathbf H(\theta))$ |
+| [optimizers.py:58](../pybmd/bmd/optimizers.py#L58) `_dominant_eigvec(A, phi)` | $\mathbf H(\phi)$ の最大固有ベクトル $\mathbf a$ と $\mathbf a^H\mathbf B\mathbf a$ |
+| [optimizers.py:105](../pybmd/bmd/optimizers.py#L105) `mengi_overton` | Mengi & Overton (2005) のレベルセット法。大域収束（唯一のソルバ） |
+| [optimizers.py:70](../pybmd/bmd/optimizers.py#L70) `_pow2_scale` | $\lVert\mathbf B\rVert_1\in(1/2,1]$ への 2 のべき乗スケーリング |
 
 **Mengi–Overton 法の要点.** レベル $w$ に対し、$\lambda_{\max}(\mathbf H(\theta)) = w$ となる角度 $\theta$ は、一般化固有値問題
 
@@ -324,22 +317,13 @@ $$
 \mathbf S=\begin{bmatrix}\mathbf B & \mathbf 0\\ \mathbf 0 & \mathbf I\end{bmatrix}
 $$
 
-の単位円上の固有値 $\mu = e^{\mathrm i\theta}$ として得られます（[optimizers.py:303-307](../pybmd/bmd/optimizers.py#L303-L307)）。
+の単位円上の固有値 $\mu = e^{\mathrm i\theta}$ として得られます（[optimizers.py:150-154](../pybmd/bmd/optimizers.py#L150-L154)）。
 交差角で区切られた区間の中点のうち、$w$ を超えるものを次の候補にします。候補がなくなれば、現在のレベルが大域最大です。
-
-**Watson の単純反復.** 次の更新を収束するまで繰り返します（[optimizers.py:212-214](../pybmd/bmd/optimizers.py#L212-L214)）。
-
-$$
-w_{m} = \mathbf a_m^H\mathbf B\mathbf a_m,\qquad
-\mathbf a_{m+1} \propto w_m\,\mathbf B^H\mathbf a_m + \overline{w_m}\,\mathbf B\,\mathbf a_m
-$$
 
 **スケーリング.** 数値半径は $r(c\mathbf B)=c\,r(\mathbf B)$（$c>0$）を満たし、最大化ベクトルは変わりません。
 実際の $\mathbf B$ は $1/N_\mathrm{blk}$ と重みのため非常に小さく（$\lVert\mathbf B\rVert_1\sim10^{-6}$ など）、MATLAB 版の絶対許容誤差では交差角が全て棄却されて過小評価が起きます。
 PyBMD は 2 のべき乗で正規化してから解き（2 進浮動小数点で誤差なし）、最後に元の $\mathbf B$ で $\mathbf a^H\mathbf B\mathbf a$ を評価し直します。
 この修正を含む MATLAB 版からの逸脱の詳細は [pybmd/bmd/CLAUDE.md](../pybmd/bmd/CLAUDE.md) の "Deviations" 節にあります。
-
-`solver='MengiOvertonMATLAB'` は、MATLAB 版の結果（過小評価を含む）を再現したいときだけ使う互換モードです。
 
 ### 5.3 論文表記との関係（$\mathbf B$ と $\mathbf B^H$）
 
@@ -405,7 +389,7 @@ $$
 - **重み $\mathbf W$ を含みません。** MATLAB 版と同じで、意図的です。
 - したがって一様重み（$\mathbf W=\mathbf I$）なら $T = \mathrm{Re}\,\lambda_1$ です（数値的に確認済み）。
   重みがある場合は $\mathbf B$ から $\mathbf W$ を除いた Rayleigh 商の実部になります。
-- 符号付きの量で、$f_{k+l}$ への（正）/からの（負）正味のエネルギー輸送を表します。図は `plot_energy_transfer`。
+- 符号付きの量で、$f_{k+l}$ への（正）/からの（負）正味のエネルギー輸送を表します。正負があるため bispectrum の図（`plot_mode_bispectrum`, $|\cdot|$ を描く）は使えません。
 
 ### 6.4 展開係数 $\mathbf a_1$
 
@@ -427,7 +411,7 @@ $$
 | `modes/triad_idx_XXXXXXXX.npy` | トライアドごとのモード `(n_comp, *xshape, nv)` |
 | `params_modes.yaml` | パラメータ |
 
-保存結果の読み込みは [pybmd/bmd/postproc.py](../pybmd/bmd/postproc.py) の `load_results` です。
+後処理（[pybmd/bmd/postproc.py](../pybmd/bmd/postproc.py)）はパスではなく fit 済みの `Standard`/`Cross` を受け取ります。保存しておく場合は `pickle` で `Standard` ごと保存し、読み込んでから渡します。
 
 ---
 
@@ -463,7 +447,7 @@ $$
 | モードの形 `(*xshape, n_state)` | [cross.py:99](../pybmd/bmd/cross.py#L99) `_unflatten_modes` |
 
 平坦軸は**状態が最も遅い添字**（`flat = j*nx + p`）です。そのため `_unflatten_modes` は `(n_state, *xshape)` に戻してから状態軸を末尾へ移します。
-CBMD では `normalize_weights` と `constituent_modes` は使えません。
+CBMD では `constituent_modes` は使えません。
 
 ---
 
@@ -472,14 +456,8 @@ CBMD では `normalize_weights` と `constituent_modes` は使えません。
 | 機能 | 理論上の意味 | 実装 |
 | --- | --- | --- |
 | `constituent_modes=True` | $\phi_k=\hat Q_k\mathbf a_1$, $\phi_l=\hat Q_l\mathbf a_1$ も出力 | [base.py:669-674](../pybmd/bmd/base.py#L669-L674) |
-| `normalize_weights=True` | 変数ごとに $w\leftarrow w/\operatorname{var}(q_v)$（異なる単位の変数を揃える） | [weights.py:94](../pybmd/utils/weights.py#L94) |
-| `normalize_data=True` | 各ブロック・各点・各変数を標準偏差で割る | [base.py:571-577](../pybmd/bmd/base.py#L571-L577) |
-| `mean_type='blockwise'` | ブロックごとの平均を除去 | [base.py:568](../pybmd/bmd/base.py#L568) |
-| `window='hann'/'boxcar'` | 窓の選択 | [utils.py:76](../pybmd/bmd/utils.py#L76) |
+| `window='hann'` | 窓の選択 | [utils.py:61](../pybmd/bmd/utils.py#L61) |
 | MPI 並列 | トライアドをラウンドロビンで分配し `allreduce` | [base.py:638](../pybmd/bmd/base.py#L638), [base.py:690-694](../pybmd/bmd/base.py#L690-L694) |
-
-`normalize_data=True` は複素数の入力データに対して分散の計算が誤っています（$|x|^2$ ではなく $x^2$ を使っている）。
-実数データには影響しません。詳細は [docs/complex-conjugation-audit.md](complex-conjugation-audit.md)。
 
 ---
 
@@ -495,7 +473,7 @@ params = dict(n_dft=64,            # N_fft
               overlap=50,          # N_ovlp = 32
               regions=[1, 2],      # 和と差の相互作用
               max_freq_idx=12)     # |k|,|l| ≤ 12
-bmd = Standard(params, weights=W.trapz_2d(x, y, n_vars=1)).fit(data)  # data: (nt, nx, ny, 1)
+bmd = Standard(params, weights=W.trapz_2d(x, y, n_vars=1)).fit(data)  # data: (nt, ny, nx, 1)
 
 i   = bmd.find_triad(12, 12)        # トライアド (12, 12, 24)
 lam = bmd.L[bmd.triads.f1_idx[i], bmd.triads.f2_idx[i]]   # λ_1（複素数）
@@ -512,7 +490,7 @@ a1  = bmd.coeffs[i]                 # a_1
 - `L` は**複素数** $\lambda_1$。モードバイスペクトルはその絶対値 $|\lambda_1|$。位相の規約は MATLAB 版と同じ（§5.3）。
 - `T` は重みを含まない。一様重みなら $T=\mathrm{Re}\,\lambda_1$。
 - モードは単位複素数倍の不定性を持つ（§5.4）。
-- 実数データなら `regions=[1,2]` で平面全体を代表できる。複素数データでは不十分（§3.3）。
+- 入力は実数のみ。`regions=[1,2]` で平面全体を代表できる（§3.3）。
 - `regions` は 1 始まり、`state_idx`/`qr_idx` は 0 始まり。
 - $|\lambda_1|$ の絶対値は重み $\mathbf W$ の規約に比例して変わる。MATLAB 版の図と比べるときは一様重みを使う。
-- 既定ソルバ `MengiOverton` は MATLAB 版の過小評価を修正している。MATLAB 版との数値の差はこれが主因（[tests/octave/octave_cross_validation.md](../tests/octave/octave_cross_validation.md)）。
+- ソルバ `MengiOverton` は MATLAB 版の過小評価を修正している。MATLAB 版との数値の差はこれが主因（[tests/octave/octave_cross_validation.md](../tests/octave/octave_cross_validation.md)）。

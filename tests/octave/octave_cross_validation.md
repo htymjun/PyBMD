@@ -76,7 +76,7 @@ violating this by up to 32% on this random case — independent confirmation tha
 
 ![Reference scale-equivariance error](figures/scale_equivariance.png)
 
-## Solver comparison and the MATLAB-compatible solver
+## Solver comparison
 
 ### Root cause
 
@@ -95,51 +95,25 @@ and the search returns a local value at `theta=0` — always an *under*-estimate
 (deviation 2 in `CLAUDE.md`) removes this, and PyBMD's `MengiOverton` matches a brute-force
 angular scan to `< 5e-7` on every triad tested.
 
-### `MengiOvertonMATLAB`: an opt-in, bug-for-bug port
-
-`solver='MengiOvertonMATLAB'` (`pybmd.bmd.optimizers.mengi_overton(..., matlab_compat=True)`)
-reverts deviations 1, 2 and 4 (not 3 — it stays RNG-free) and reproduces `bmd.m`'s own
-`MengiOverton` instead. It exists **only** to reproduce a specific published MATLAB result; it
-reproduces a confirmed under-estimation bug and must not be used to analyse new data. The default
-solver is unchanged.
-
 Full `wake_Re500.mat`, `regions=[1,2]`, `max_freq_idx=12`, 169 triads, `n_blocks=7`, median
 `‖B‖₁ = 5.18e-06` — the exact configuration the Deviations section of `CLAUDE.md` cites:
 
 | solver on identical `B` | max rel vs `bmd.m` | >1% | >10% |
 | --- | --- | --- | --- |
-| PyBMD `MengiOverton` (default) | 4.558e-01 | 52/169 | 29/169 |
-| PyBMD `MengiOvertonMATLAB` | **3.808e-06** (median 9.6e-16) | 0/169 | 0/169 |
+| PyBMD `MengiOverton` | 4.558e-01 | 52/169 | 29/169 |
 
 Ablation on the smaller shipped fixture (`tests/data/wake_Re500_sub.npz`, 81 triads, median
-`‖B‖₁ = 2.67e-04`), reverting one deviation at a time — deviation 2 (`_pow2_scale`) carries
-essentially the whole gap, and all three only reproduce `bmd.m` applied together:
+`‖B‖₁ = 2.67e-04`), reverting one deviation at a time (measured with a bug-compatible variant that has since been
+removed from PyBMD) — deviation 2 (`_pow2_scale`) carries essentially the whole gap, and all
+three only reproduce `bmd.m` applied together:
 
 | variant | max rel vs `bmd.m` | >1% |
 | --- | --- | --- |
 | PyBMD `MengiOverton` (nothing reverted) | 6.663e-01 | 7/81 |
-| all three reverted (`MengiOvertonMATLAB`) | **4.885e-06** | 0/81 |
+| all three reverted | **4.885e-06** | 0/81 |
 | only signed `max_fov` reverted | 6.663e-01 | 7/81 |
 | only `_pow2_scale` reverted | 2.810e-01 | 1/81 |
 | only the `max(w,1)` clamp reverted | 6.663e-01 | 7/81 |
-
-![Three-way solver comparison](figures/three_way_solver_comparison.png)
-
-The deviation maps in the (k,l) plane (bottom row) are visually near-identical between the
-reference and `MengiOvertonMATLAB` — the compat solver reproduces not just the aggregate counts
-but which specific triads the reference gets wrong.
-
-### `MengiOvertonMATLAB`'s fidelity degrades as `‖B‖₁ → 0`
-
-Reproducing a branch decision taken exactly at the tolerance boundary is inherently unstable
-across LAPACK builds and language boundaries — this is a limit of bug-compatibility, not a defect
-to chase further. Measured on the paper's hypothesis-test surrogate (see below), where the
-noise-free cases sit at `‖B‖₁ ~ 1e-9`, an order of magnitude below the cylinder-wake fixtures:
-
-| `MengiOvertonMATLAB` vs `bmd.m` `MengiOverton` | median `‖B‖₁` | max rel | >1% |
-| --- | --- | --- | --- |
-| triad, SNR = 1 | 2.15e-03 | **4.4e-15** | 0/780 |
-| triad, no noise | 3.48e-09 | 5.0e-01 | 9/780 |
 
 ### Hypothesis testing: PyBMD vs. `bmd.m`, and He & Watson vs. Mengi-Overton
 
@@ -162,24 +136,17 @@ Per-triad deviation from PyBMD's `MengiOverton`:
 | --- | --- | --- |
 | `bmd.m` `MengiOverton` | 6.121e-01 (576/780 >1%) | 2.961e-01 (109/780) |
 | `bmd.m` `HeWatson` | 9.791e-01 (554/780) | 7.019e-01 (6/780) |
-| PyBMD `simpleIteration` | 1.918e-04 (0/780) | 4.377e-04 (0/780) |
-| PyBMD `MengiOvertonMATLAB` | 6.121e-01 (577/780) | 2.961e-01 (109/780) |
 
-Three conclusions:
+Two conclusions:
 
 1. **The bug never changes the paper's conclusion.** Every solver and implementation puts the
    peak on the driven triad at the same `|λ₁|`. The disagreement is confined to the near-zero
    background (the right-hand panels above), never the resonant peak itself.
-2. **PyBMD's `simpleIteration` *is* the paper's algorithm** (Watson's simple iteration, Algorithm
-   1 of the paper's appendix) and agrees with `MengiOverton` everywhere tested here. `bmd.m`'s
-   `HeWatson` is that same iteration from an *unseeded* random start, wrapped in an outer loop
-   whose unit-circle test (`bmd.m:363`) has the same absolute-tolerance bug as `MengiOverton`'s,
-   so it almost always exits after one inner iteration; its disagreement (and its numbers vary
-   run to run, since the start vector is never seeded) reflects random-start non-convergence, not
-   a value worth reproducing bit-for-bit.
-3. This is also where `MengiOvertonMATLAB`'s fidelity limit (previous section) is visible in
-   practice: it tracks `bmd.m`'s `MengiOverton` almost exactly at SNR=1 but decorrelates on 9/780
-   triads without noise, where `‖B‖₁` sits right at the tolerance floor.
+2. `bmd.m`'s `HeWatson` is Watson's simple iteration (Algorithm 1 of the paper's appendix) from
+   an *unseeded* random start, wrapped in an outer loop whose unit-circle test (`bmd.m:363`) has
+   the same absolute-tolerance bug as `MengiOverton`'s, so it almost always exits after one inner
+   iteration; its disagreement (and its numbers vary run to run, since the start vector is never
+   seeded) reflects random-start non-convergence, not a value worth reproducing bit-for-bit.
 
 ## Regenerating Figures
 

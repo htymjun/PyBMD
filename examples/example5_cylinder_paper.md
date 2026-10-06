@@ -58,7 +58,7 @@ independent of everything above. `refs/bmd/bmd.m:279-281` defaults to `weight = 
 published figure was made with a **uniform** weight, not a physically-motivated quadrature one.
 Using `pybmd.utils.weights.trapz_2d` instead (a reasonable default for other PyBMD work) shifted
 this figure's `[vmin, vmax]` to `[-29.99, -4.49]` against the reference's measured
-`[-28.4, +0.37]`; switching to `pybmd.utils.weights.uniform((n1, n2), n_vars=1, dV=1.0)` (matching
+`[-28.4, +0.37]`; switching to `pybmd.utils.weights.uniform((ny, nx), n_vars=1, dV=1.0)` (matching
 `bmd.m`'s default) brings it to `[-25.9, -0.48]` for `u` alone.
 
 The paper analyses `q = [u, v]`, so the script now uses both variables. That gives `[-25.55, -0.69]`,

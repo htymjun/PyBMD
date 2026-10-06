@@ -62,11 +62,10 @@ def _check_prereqs():
         sys.exit('Cannot build the report:\n  ' + '\n  '.join(missing))
 
 
-def _full_dataset_run(pybmd_solver='MengiOverton'):
+def _full_dataset_run():
     '''
     PyBMD and reference L, at the config octave_cross_validation.md
-    cites. ``pybmd_solver`` selects PyBMD's own solver; the reference side
-    always runs bmd.m's own MengiOverton -- the fixed point of comparison.
+    cites; the reference side runs bmd.m's own MengiOverton.
     '''
     mat_path = oref.require_full_dataset()
     d = scipy.io.loadmat(mat_path)
@@ -77,12 +76,10 @@ def _full_dataset_run(pybmd_solver='MengiOverton'):
 
     params = dict(n_dft=256, time_step=dt, n_space_dims=2, n_variables=1,
                  n_overlap=128, regions=[1, 2], max_freq_idx=12,
-                 save_modes=False, tol=1e-6, n_it_max=500, solver=pybmd_solver,
-                 savedir=os.path.join(FIG_DIR, f'_scratch_{pybmd_solver}'))
+                 save_modes=False, tol=1e-6, n_it_max=500,
+                 savedir=os.path.join(FIG_DIR, '_scratch'))
     w = utils_weights.uniform((n1, n2), 1, dV)
     bmd = Standard(params=params, weights=w).fit(x)
-    # the octave call is identical across pybmd_solver values, so octave_ref's
-    # in-process cache turns every call after the first into a no-op
     out = oref.run('bmd', x, window=bmd._window.ravel(), weight=w['weights'],
                    n_overlap=128, dt=dt, regions=[1, 2], max_freq_idx=12,
                    tol=1e-6, n_it_max=500, timeout=280)
@@ -130,94 +127,24 @@ def fig_deviation(bmd, L_ref):
     return rel
 
 
-def fig_three_way_solver_comparison(bmd, L_ref):
-    '''
-    Three-way comparison on the config fig_bispectrum_comparison/fig_deviation
-    already use: the reference's own (bug-affected) MengiOverton, PyBMD's
-    default (corrected) MengiOverton, and PyBMD's MengiOvertonMATLAB -- a
-    bug-for-bug port that exists to reproduce the reference. This is the
-    live-Octave-checked artifact behind the ablation tables CLAUDE.md's
-    Deviations section quotes.
-    '''
-    bmd_compat, _ = _full_dataset_run(pybmd_solver='MengiOvertonMATLAB')
-    t = bmd.triads
-    vals_py = np.abs(bmd.L[t.f1_idx, t.f2_idx])
-    vals_compat = np.abs(bmd_compat.L[t.f1_idx, t.f2_idx])
-    vals_ref = np.abs(L_ref[t.f1_idx, t.f2_idx])
-
-    fig = plt.figure(figsize=(13, 8.5))
-    for i, (L, name) in enumerate([
-            (L_ref, 'Reference bmd.m\n(own MengiOverton)'),
-            (bmd.L, 'PyBMD MengiOverton\n(default, corrected)'),
-            (bmd_compat.L, 'PyBMD MengiOvertonMATLAB\n(bug-compatible)')]):
-        ax = fig.add_subplot(2, 3, i + 1)
-        plot_mode_bispectrum(L, bmd.freq, ax=ax, title=name)
-
-    ax4 = fig.add_subplot(2, 3, 4)
-    lim = max(vals_py.max(), vals_ref.max(), vals_compat.max()) * 1.05
-    ax4.plot([0, lim], [0, lim], 'k--', lw=1, label='y = x')
-    ax4.scatter(vals_py, vals_ref, s=18, color='crimson', label='bmd.m')
-    ax4.scatter(vals_py, vals_compat, s=18, color='tab:blue', marker='x',
-               label='PyBMD MengiOvertonMATLAB')
-    ax4.set_xlabel(r'PyBMD MengiOverton $|\lambda_1|$')
-    ax4.set_ylabel(r'$|\lambda_1|$')
-    ax4.set_xlim(0, lim)
-    ax4.set_ylim(0, lim)
-    ax4.set_aspect('equal')
-    ax4.legend(fontsize=8, loc='upper left')
-    ax4.set_title('bmd.m and MengiOvertonMATLAB land on the\n'
-                 'same line, both at or below PyBMD default', fontsize=9)
-
-    for ax_idx, vals, title in (
-            (5, vals_ref, 'Reference deviation\nfrom PyBMD default, %'),
-            (6, vals_compat, 'MengiOvertonMATLAB deviation\nfrom PyBMD default, %')):
-        ax = fig.add_subplot(2, 3, ax_idx)
-        rel = _rel(vals, vals_py)
-        sc = ax.scatter(t.k, t.l, c=100 * rel, cmap='inferno_r', s=40,
-                        vmin=0, vmax=max(1.0, float(100 * rel.max())),
-                        edgecolors='none')
-        ax.set_xlabel('$k$')
-        ax.set_ylabel('$l$')
-        ax.set_aspect('equal')
-        ax.set_title(title, fontsize=9)
-        fig.colorbar(sc, ax=ax)
-
-    fig.suptitle('Three-way solver comparison -- cylinder wake, regions={1,2}, '
-                'max_freq_idx=12, 169 triads')
-    fig.tight_layout()
-    _save(fig, 'three_way_solver_comparison.png')
-
-    rel_ref = _rel(vals_ref, vals_py)
-    rel_compat = _rel(vals_compat, vals_py)
-    rel_compat_vs_ref = _rel(vals_compat, vals_ref)
-    print(f'  bmd.m               vs PyBMD default: max rel {rel_ref.max():.3e}; '
-         f'>1%: {int((rel_ref > 0.01).sum())}/{len(rel_ref)}; '
-         f'>10%: {int((rel_ref > 0.10).sum())}/{len(rel_ref)}')
-    print(f'  MengiOvertonMATLAB  vs PyBMD default: max rel {rel_compat.max():.3e}; '
-         f'>1%: {int((rel_compat > 0.01).sum())}/{len(rel_compat)}')
-    print(f'  MengiOvertonMATLAB  vs bmd.m        : max rel {rel_compat_vs_ref.max():.3e}; '
-         f'>1%: {int((rel_compat_vs_ref > 0.01).sum())}/{len(rel_compat_vs_ref)}')
-
-
 def _hypothesis_run(freqs, snr, max_freq_idx=40):
     '''
-    PyBMD (three solvers) and the reference bmd.m (two solvers) on one
+    PyBMD and the reference bmd.m (two solvers) on one
     hypothesis-test surrogate case, through example4's ``fit_case`` (n_dft=128,
     overlap=0, Hann window, regions=[1], 10 blocks).
 
     :return: ``(results, triads)``, where ``results`` maps
-        ``'pybmd_<solver>'`` and ``'bmd_<solver>'`` to the respective ``L``.
+        ``'pybmd_MengiOverton'`` and ``'bmd_<solver>'`` to the respective
+        ``L``.
     '''
     q, x, k = surrogate_waves(freqs, seed=0, snr=snr)
     w = utils_weights.uniform((x.size,), n_vars=1, dV=x[1] - x[0])
 
-    results = {}
-    for solver in ('MengiOverton', 'MengiOvertonMATLAB', 'simpleIteration'):
-        name = f'_scratch_hyp_{solver}'
-        bmd, _, _ = fit_case(name, freqs, snr=snr, save_dir=FIG_DIR,
-                             solver=solver, max_freq_idx=max_freq_idx)
-        results[f'pybmd_{solver}'] = bmd.L
-        shutil.rmtree(os.path.join(FIG_DIR, name), ignore_errors=True)
+    name = '_scratch_hyp'
+    bmd, _, _ = fit_case(name, freqs, snr=snr, save_dir=FIG_DIR,
+                         max_freq_idx=max_freq_idx)
+    results = {'pybmd_MengiOverton': bmd.L}
+    shutil.rmtree(os.path.join(FIG_DIR, name), ignore_errors=True)
 
     # bmd.m's HeWatson draws an unseeded random start vector (refs/bmd/bmd.m
     # has no seeding hook this driver can reach), so its numbers -- unlike
@@ -240,7 +167,7 @@ def fig_hypothesis_pybmd_vs_matlab():
     through PyBMD and through the real bmd.m under Octave, so the published
     qualitative conclusion (a clean peak on the driven triad, side peaks
     suppressed) is checked directly rather than inferred from the isolated
-    B-matrix comparison in fig_three_way_solver_comparison.
+    B-matrix comparison in test_octave_reference.py's Tier C.
     '''
     cases = [('no noise', None), ('SNR = 1', 1.0)]
     fig = plt.figure(figsize=(16, 9))
@@ -274,8 +201,6 @@ def fig_hypothesis_pybmd_vs_matlab():
         alternatives = [
             ('bmd.m MengiOverton', 'bmd_MengiOverton', 'crimson'),
             ('bmd.m HeWatson', 'bmd_HeWatson', 'tab:orange'),
-            ('PyBMD simpleIteration', 'pybmd_simpleIteration', 'tab:green'),
-            ('PyBMD MengiOvertonMATLAB', 'pybmd_MengiOvertonMATLAB', 'tab:blue'),
         ]
         for name, key, color in alternatives:
             vals = np.abs(results[key][t.f1_idx, t.f2_idx])
@@ -355,7 +280,6 @@ def main():
     print(f'full dataset: {int((rel > 0.01).sum())}/{rel.size} triads off by '
          f'>1%, {int((rel > 0.10).sum())}/{rel.size} by >10%')
 
-    fig_three_way_solver_comparison(bmd, L_ref)
     fig_hypothesis_pybmd_vs_matlab()
 
     fig_scale_equivariance()

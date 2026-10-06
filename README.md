@@ -34,7 +34,7 @@ triplets `{f1, f2, f1+f2}`, or index triplets `(k, l, k+l)`.*
 ```bash
 pip install -e .              # core: numpy, scipy, pyyaml, matplotlib
 pip install -e '.[mpi]'       # add mpi4py for parallel runs
-pip install -e '.[io,test]'   # .mat/.nc readers, and pytest
+pip install -e '.[io,test]'   # .mat reader (v7.3), and pytest
 ```
 
 ## Usage
@@ -44,8 +44,10 @@ import numpy as np
 from pybmd.bmd.standard import Standard
 import pybmd.utils.weights as utils_weights
 
-# data has time first and the variable index last: (nt, *spatial, n_variables)
-data = ...
+# data has time first and the variable index last: (nt, *spatial, n_variables).
+# Spatial axes follow NumPy/matplotlib: (ny, nx) in 2-D, (nz, ny, nx) in 3-D.
+# MATLAB/Fortran arrays are (nx, ny): transpose them first, e.g. u.transpose(0, 2, 1).
+data = ...   # (nt, ny, nx, 2)
 
 params = dict(
     n_dft=256,               # snapshots per block
@@ -58,11 +60,11 @@ params = dict(
     solver='MengiOverton',
     savedir='bmd_results',
 )
-weights = utils_weights.trapz_2d(x, y, n_vars=2)
+weights = utils_weights.trapz_2d(x, y, n_vars=2)   # x: (nx,), y: (ny,)
 bmd = Standard(params=params, weights=weights).fit(data)
 
 # the mode bispectrum, NaN outside the computed triads
-L = bmd.bispectrum
+L = bmd.L
 
 # look a triad up by its index doublet, then load its two modes
 i = bmd.triads.find(k=5, l=-2)
@@ -78,22 +80,26 @@ Plotting:
 ```python
 from pybmd.bmd.postproc import plot_mode_bispectrum, plot_triad_modes
 plot_mode_bispectrum(bmd.L, bmd.freq)
-plot_triad_modes(bmd.get_modes_at_triad(i), k=5, l=-2, x1=x[:, 0], x2=y[0, :])
+plot_triad_modes(bmd.get_modes_at_triad(i), k=5, l=-2, x=x, y=y)
 ```
 
-Visualizing an existing results directory:
+Post-processing takes a fitted `Standard`/`Cross`, not a path. To revisit a result later, pickle
+the fitted object (modes saved with `save_modes` are read back from `bmd.savedir_sim`, so keep
+that directory):
 
 ```python
-from pybmd.bmd.postproc import (
-    load_results, top_triads, plot_mode_bispectrum_from_dir,
-    plot_triad_modes_from_dir,
-)
+import pickle
+from pybmd.bmd.postproc import top_triads, plot_mode_bispectrum, plot_triad_modes
 
-results = load_results('bmd_results/nfft256_novlp128_nblks9')
-top = top_triads(results, n=5)
-plot_mode_bispectrum_from_dir(results.path)
-plot_triad_modes_from_dir(results.path, triad_idx=int(top[0]['triad_idx']),
-                          x1=x[:, 0], x2=y[0, :])
+with open('bmd.pkl', 'wb') as f:
+    pickle.dump(bmd, f)
+with open('bmd.pkl', 'rb') as f:
+    bmd = pickle.load(f)
+
+top = top_triads(bmd, n=5)
+plot_mode_bispectrum(bmd.L, bmd.freq)
+plot_triad_modes(bmd.get_modes_at_triad(int(top[0]['triad_idx'])),
+                 int(top[0]['k']), int(top[0]['l']), x=x, y=y)
 ```
 
 Running in parallel — the triad loop is distributed across ranks and results are identical to a
@@ -126,19 +132,14 @@ and `example5_cylinder_paper.py` (cylinder-wake mode bispectrum and modes, Figs.
 | --- | --- | --- |
 | `overlap` | `50` | block overlap, in **percent** |
 | `n_overlap` | — | block overlap in snapshots; takes precedence over `overlap` |
-| `window` | `'hamming'` | `'hamming'`, `'hann'`, `'boxcar'`, or an array |
-| `mean_type` | `'longtime'` | `'longtime'`, `'blockwise'`, `'zero'` (alias `'none'`) |
+| `window` | `'hamming'` | `'hamming'` or `'hann'` |
 | `regions` | `[1, 2]` | regions of the bispectrum to compute, in 1..8 |
 | `max_freq_idx` | `None` | bound on `\|k\|` and `\|l\|`; default is Nyquist |
-| `solver` | `'MengiOverton'` | also `'MengiOvertonMATLAB'`, `'simpleIteration'` |
-| `tol` | `1e-6` | solver tolerance |
-| `n_it_max` | `500` | solver iteration cap |
+| `tol` | `1e-6` | Mengi–Overton solver tolerance |
+| `n_it_max` | `500` | Mengi–Overton iteration cap |
 | `dtype` | `'double'` | `'double'` or `'single'` |
-| `normalize_weights` | `False` | divide each variable's weight by that variable's variance (`Standard` only) |
-| `normalize_data` | `False` | standardize each point and variable within a block by its standard deviation |
 | `save_modes` | `True` | write `modes/triad_idx_{i:08d}.npy` |
 | `store_modes` | `False` | also keep all modes in memory, exposed as `.modes` |
-| `max_modes_gb` | `8.0` | refuse to write more than this without an explicit raise |
 | `compute_energy_transfer` | `True` | fill the energy-transfer term `T` |
 | `savedir` | `'bmd_results'` | results directory |
 
@@ -167,26 +168,15 @@ departures, each of which changes results:
    Without rescaling, every crossing is rejected and the solver returns a local maximum;
    measured at `‖A‖₁ ~ 1e-6`, it returned 93.7 % of the true value. Scaling by a power of two
    is exact in binary floating point, so this only re-conditions the problem.
-3. **The energy-transfer term `T` is computed**, and the solvers use a deterministic start
-   vector rather than a global RNG, so results do not depend on how triads are distributed
-   across MPI ranks.
+3. **The energy-transfer term `T` is computed**, and the solver uses no RNG, so results do not
+   depend on how triads are distributed across MPI ranks.
 4. **The level-set filter uses `sqrt(eps)·max(w, 1)`** rather than the reference's
    `sqrt(eps)·w`, which for the tiny levels of real BMD matrices rejects valid crossings. See
    [`pybmd/bmd/CLAUDE.md`](pybmd/bmd/CLAUDE.md) for the measurements, and for a fifth, cosmetic
    difference in how crossing angles are de-duplicated.
 
-`solver='simpleIteration'` is Watson's simple iteration — the inner loop of the He–Watson
-algorithm the paper's appendix prescribes. (The reference accepts that option name but cannot
-actually run it; see `pybmd/bmd/CLAUDE.md`.) It is not globally convergent — on random matrices it
-under-estimated the numerical radius in 14 of 40 cases, worst case 62 % low — so `MengiOverton`
-is the default.
-
-`solver='MengiOvertonMATLAB'` reverts deviations 1, 2 and 4 above to reproduce `bmd.m`'s own
-`MengiOverton` bug-for-bug, confirmed live
-against the real MATLAB source under Octave to a few micro-relative on well-scaled problems. It
-exists **only** to reproduce a specific published MATLAB result — it reproduces a confirmed
-under-estimation bug and should never be used to analyse new data. See `tests/octave/octave_cross_validation.md`
-for the measured figures and `pybmd.bmd.optimizers.mengi_overton`'s docstring for the caveats.
+The numerical radius is always maximised with Mengi–Overton's globally convergent level-set
+algorithm (the default of `bmd.m` since its 17-Aug-2023 revision), with the fixes above.
 
 ## Testing
 

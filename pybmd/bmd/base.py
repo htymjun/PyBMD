@@ -16,9 +16,10 @@ import pybmd.bmd.utils as utils_bmd
 import pybmd.bmd.optimizers as optimizers
 import pybmd.utils.io as utils_io
 import pybmd.utils.parallel as utils_par
-import pybmd.utils.weights as utils_weights
 
 B2GB = 9.3132257461548e-10
+# above this, keeping every mode (save_modes/store_modes) is refused
+MAX_MODES_GB = 8.0
 
 
 def _yaml_safe(obj):
@@ -53,13 +54,11 @@ class Base():
     :param dict weights: spatial inner-product weights, as returned by the
         constructors in :mod:`pybmd.utils.weights`. Default is uniform.
     :param MPI.Comm comm: parallel communicator. Default is None (serial).
-    :param numpy.ndarray mean: long-time mean to subtract instead of the one
-        computed from the data. Default is None.
     '''
 
     _label = 'BMD'   # name used in the timing print
 
-    def __init__(self, params, weights=None, comm=None, mean=None):
+    def __init__(self, params, weights=None, comm=None):
         ##--- required
         self._n_dft = params['n_dft']
         self._dt = params['time_step']
@@ -76,29 +75,21 @@ class Base():
         # absolute overlap in snapshots; takes precedence over `overlap`
         self._n_overlap_req = params.get('n_overlap', None)
         self._window_req = params.get('window', 'hamming')
-        self._mean_type = params.get('mean_type', 'longtime')
 
         ##--- optional: bispectrum
         self._regions = params.get('regions', [1, 2])
         self._max_freq_idx = params.get('max_freq_idx', None)
 
-        ##--- optional: solver
-        self._solver = params.get('solver', 'MengiOverton')
+        ##--- optional: solver (Mengi-Overton)
         self._solver_tol = params.get('tol', 1e-6)
         self._solver_n_it_max = params.get('n_it_max', 500)
-        # explicit start vector for the iterative solvers, used to reproduce
-        # results from another implementation
-        self._solver_z0 = params.get('solver_z0', None)
 
         ##--- optional: storage
         self._dtype = params.get('dtype', 'double')
-        self._normalize_weights = params.get('normalize_weights', False)
-        self._normalize_data = params.get('normalize_data', False)
         # resolve against the working directory at construction, not at import
         self._savedir = os.path.abspath(params.get('savedir', 'bmd_results'))
         self._save_modes = params.get('save_modes', True)
         self._store_modes = params.get('store_modes', False)
-        self._max_modes_gb = params.get('max_modes_gb', 8.0)
         # opt-in: also compute and store the two constituent modes phi_k,
         # phi_l alongside the sum and quadratic-term modes
         self._constituent_modes = params.get('constituent_modes', False)
@@ -110,7 +101,6 @@ class Base():
         self._params = dict(params)
         self._params['savedir'] = self._savedir
         self._weights_tmp = weights
-        self._mean_user = mean
         self._comm = comm
         self._float, self._complex = utils_bmd._get_dtype(self._dtype)
 
@@ -123,18 +113,6 @@ class Base():
             self._size = 1
 
         ## validate eagerly, so a bad configuration fails before any I/O
-        if self._solver not in optimizers.SOLVERS:
-            raise ValueError(
-                f'solver must be one of {optimizers.SOLVERS}; '
-                f'got {self._solver!r}.')
-        if self._mean_type.lower() not in ('longtime', 'blockwise', 'zero',
-                                           'none'):
-            raise ValueError(f'{self._mean_type} not recognized.')
-        if self._solver_z0 is not None and self._solver != 'simpleIteration':
-            raise ValueError(
-                f'solver_z0 is only used by the simpleIteration solver; the '
-                f'{self._solver} solver is deterministic and takes no start '
-                f'vector.')
         if self._n_dft < 4:
             raise ValueError(
                 f'n_dft must be at least 4; got {self._n_dft}.')
@@ -247,16 +225,6 @@ class Base():
         return self._savedir_sim
 
     @property
-    def modes_dir(self):
-        '''Directory where modes are saved.'''
-        return self._modes_dir
-
-    @property
-    def dim(self):
-        '''Number of dimensions of the data matrix.'''
-        return self._dim
-
-    @property
     def shape(self):
         '''Shape of the data matrix.'''
         return self._shape
@@ -342,29 +310,19 @@ class Base():
         return self._weights
 
     @property
-    def bispectrum(self):
-        '''
-        The mode bispectrum ``L``, of shape ``(n_freq, n_freq)``. Entries that
-        do not correspond to a computed triad are NaN.
-        '''
-        return self._L
-
-    @property
     def L(self):
-        '''Alias of :attr:`bispectrum`.'''
+        '''
+        The mode bispectrum, of shape ``(n_freq, n_freq)``. Entries that do
+        not correspond to a computed triad are NaN.
+        '''
         return self._L
-
-    @property
-    def energy_transfer(self):
-        '''
-        The energy-transfer term ``T``, of shape ``(n_freq, n_freq)``. Entries
-        that do not correspond to a computed triad are NaN.
-        '''
-        return self._T
 
     @property
     def T(self):
-        '''Alias of :attr:`energy_transfer`.'''
+        '''
+        The energy-transfer term, of shape ``(n_freq, n_freq)``. Entries that
+        do not correspond to a computed triad are NaN.
+        '''
         return self._T
 
     @property
@@ -448,17 +406,10 @@ class Base():
         ## define and check weights
         self.define_weights()
 
-        ## apply mean
+        ## long-time mean, subtracted from every block
         st = time.time()
-        self.select_mean(self.data)
+        self._t_mean = self.long_t_mean(self.data)
         self._pr0(f'- computed mean: {time.time() - st} s.')
-
-        ## normalize weights if required
-        if self._normalize_weights:
-            self._pr0('- normalizing weights')
-            self._weights = utils_weights.apply_normalization(
-                data=self.data, weights=self._weights,
-                n_vars=self._nv, comm=self._comm)
 
         ## flatten weights, in the same C order the data is flattened in
         self._weights = np.reshape(self._weights, [-1, 1])
@@ -505,14 +456,13 @@ class Base():
                                * int(np.prod(self._mode_shape))
                                * self._complex(1).nbytes * B2GB)
         if ((self._save_modes or self._store_modes)
-                and self._modes_size_gb > self._max_modes_gb):
+                and self._modes_size_gb > MAX_MODES_GB):
             raise ValueError(
                 f'Keeping all modes would need {self._modes_size_gb:.2f} GB '
                 f'(on disk with save_modes, and on every rank with '
-                f'store_modes), above the max_modes_gb limit of '
-                f'{self._max_modes_gb:.2f} GB. Set params["save_modes"] and '
-                f'params["store_modes"] to False to store only the '
-                f'coefficients, or raise params["max_modes_gb"].')
+                f'store_modes), above the limit of {MAX_MODES_GB:.2f} GB. Set '
+                f'params["save_modes"] and params["store_modes"] to False to '
+                f'store only the coefficients.')
 
         self._print_parameters()
         self._pr0(f'------------------------------------')
@@ -551,38 +501,6 @@ class Base():
                 f'spatial shape rather than a flattened vector, so that it is '
                 f'unambiguous which weight belongs to which grid point.')
 
-    def select_mean(self, data):
-        '''Select the mean to subtract from every block.'''
-        mean_type = self._mean_type.lower()
-        self._lt_mean = self.long_t_mean(data)
-        if self._mean_user is not None:
-            mean_user = np.asarray(self._mean_user)
-            expected = tuple(self._xshape) + (self._nv,)
-            if mean_user.shape != expected:
-                # same reasoning as for the weights: a flat vector, or the
-                # reference's variable-first layout, has the right number of
-                # elements and would silently attach the wrong mean to every
-                # point
-                raise ValueError(
-                    f'mean has shape {mean_user.shape} but {expected} is '
-                    f'required: the full spatial shape with the variable axis '
-                    f'last, in the same layout as the data.')
-            if mean_type == 'blockwise' and self._rank == 0:
-                warnings.warn(
-                    'A user mean was passed together with '
-                    'mean_type="blockwise"; the user mean is subtracted and '
-                    'no blockwise mean is removed.')
-            self._t_mean = self._set_dtype(np.reshape(mean_user, [-1]))
-            self._mean_type = 'user'
-        elif mean_type == 'longtime':
-            self._t_mean = self._lt_mean
-        elif mean_type in ('blockwise', 'zero', 'none'):
-            self._t_mean = 0.0
-            if mean_type in ('zero', 'none') and self._rank == 0:
-                warnings.warn(
-                    'No mean subtracted. Consider using longtime mean.')
-        return self._t_mean
-
     def long_t_mean(self, data):
         '''Compute the long-time mean, flattened over space and variables.'''
         t_mean = np.mean(data, axis=0)
@@ -605,18 +523,6 @@ class Base():
         '''
         q_blk, offset = self._get_block(i_blk)
         q_blk = q_blk - self._t_mean
-
-        if self._mean_type.lower() == 'blockwise':
-            q_blk = q_blk - np.mean(q_blk, axis=0)
-
-        if self._normalize_data:
-            # standardize every point and variable to unit variance within the
-            # block, i.e. divide by the standard deviation
-            den = self._n_dft - 1
-            centered = q_blk - np.mean(q_blk, axis=0)
-            q_var = np.sum(np.abs(centered)**2, axis=0) / den
-            q_var[q_var < 4 * np.finfo(q_blk.dtype).eps] = 1
-            q_blk = q_blk / np.sqrt(q_var)
 
         q_blk = q_blk * self._window
         q_blk = self._set_dtype(q_blk)
@@ -690,9 +596,8 @@ class Base():
             # requested dtype -- B is only (n_blocks, n_blocks), so the accuracy
             # is free -- but the results are stored at the requested precision
             B = B.astype(np.complex128, copy=False)
-            r, a = optimizers.solve(
-                B, solver=self._solver, tol=self._solver_tol,
-                n_it_max=self._solver_n_it_max, z0=self._solver_z0)
+            r, a = optimizers.mengi_overton(
+                B, tol=self._solver_tol, n_it_max=self._solver_n_it_max)
             a = a.astype(self._complex)
             psi_sum = q_sum @ a
             psi_prod = q_prod @ a
@@ -800,7 +705,6 @@ class Base():
         self._params['n_blocks'] = int(self._n_blocks)
         self._params['n_overlap'] = int(self._n_overlap)
         self._params['overlap'] = float(self._overlap)
-        self._params['solver'] = str(self._solver)
 
         if self._rank == 0:
             # arrays first: the YAML dump is the one step that can fail on an
@@ -812,7 +716,7 @@ class Base():
             np.save(os.path.join(self._savedir_sim, 'weights.npy'),
                     self._weights)
             np.save(os.path.join(self._savedir_sim, 'ltm_modes.npy'),
-                    self._lt_mean)
+                    self._t_mean)
             path_params = os.path.join(self._savedir_sim, 'params_modes.yaml')
             with open(path_params, 'w') as f:
                 yaml.dump(_yaml_safe(self._params), f)
@@ -849,7 +753,6 @@ class Base():
         self._pr0(f'No. of blocks            : {self._n_blocks}')
         self._pr0(f'Windowing fct. (time)    : {self._window_name}')
         self._pr0(f'Weighting fct. (space)   : {self._weights_name}')
-        self._pr0(f'Mean                     : {self._mean_type}')
         self._pr0(f'Time-step                : {self._dt}')
         self._pr0(f'Time snapshots           : {self._nt}')
         self._pr0(f'Space dimensions         : {self._xdim}')
@@ -860,15 +763,8 @@ class Base():
         self._pr0(f'Max frequency index      : {self._max_freq_idx} '
                   f'(Nyquist index {self._triads.f_nyq_idx})')
         self._pr0(f'Number of triads         : {self.n_triads}')
-        # flag the bug-compatible solver loudly: it exists only to reproduce
-        # a specific published MATLAB result and always under-estimates, so
-        # a run must not be able to use it silently
-        compat_note = (' [MATLAB-COMPATIBLE: reproduces refs/bmd/bmd.m\'s '
-                       'known under-estimation bug -- see optimizers.py]'
-                       if self._solver == 'MengiOvertonMATLAB' else '')
-        self._pr0(f'Solver (x*Ax)            : {self._solver} '
-                  f'(tol {self._solver_tol}, n_it_max {self._solver_n_it_max})'
-                  f'{compat_note}')
+        self._pr0(f'Solver (x*Ax)            : MengiOverton '
+                  f'(tol {self._solver_tol}, n_it_max {self._solver_n_it_max})')
         self._pr0(f'MPI ranks                : {self._size}')
         self._pr0(f'Results to be saved in   : {self._savedir}')
         self._pr0(f'------------------------------------')

@@ -11,12 +11,11 @@ CF = os.path.realpath(__file__)
 CFD = os.path.dirname(CF)
 sys.path.append(os.path.join(CFD, '../../'))
 
-from pybmd.bmd.optimizers import solve, SOLVERS
+from pybmd.bmd.optimizers import mengi_overton
 
 
 def test_zero_matrix():
     A = np.zeros((4, 4), dtype=complex)
-    for name in SOLVERS:
-        w, z = solve(A, solver=name)
-        assert abs(w) == pytest.approx(0.0, abs=1e-12), name
-        assert np.linalg.norm(z) == pytest.approx(1.0), name
+    w, z = mengi_overton(A)
+    assert abs(w) == pytest.approx(0.0, abs=1e-12)
+    assert np.linalg.norm(z) == pytest.approx(1.0)

@@ -14,8 +14,6 @@ import sys
 import numpy as np
 import pytest
 
-from pybmd.bmd.postproc import resolve_results_path
-
 SCRIPT = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'mpi_fit.py')
 
 
@@ -36,7 +34,8 @@ def _run(exe, extra, n_ranks, savedir):
     proc = subprocess.run(cmd, env=env, capture_output=True, text=True,
                           timeout=600)
     assert proc.returncode == 0, proc.stdout[-3000:] + proc.stderr[-3000:]
-    return resolve_results_path(savedir)
+    sim, = os.listdir(savedir)  # the single nfft*_novlp*_nblks* directory
+    return os.path.join(savedir, sim)
 
 
 @pytest.mark.mpi

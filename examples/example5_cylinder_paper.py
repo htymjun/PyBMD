@@ -75,16 +75,16 @@ def _panel(ax, field, freq, xlim, ylim, vmin, vmax):
 
 
 def symmetric_fraction(field):
-    '''Share of ``sum |field|^2`` in the part even in y (axis 1), for a grid
+    '''Share of ``sum |field|^2`` in the part even in y (axis 0), for a grid
     symmetric about y = 0: 1 for a symmetric field, 0 for an antisymmetric one.'''
-    even = 0.5 * (field + field[:, ::-1])
+    even = 0.5 * (field + field[::-1, :])
     return float(np.sum(np.abs(even)**2) / np.sum(np.abs(field)**2))
 
 
 def streamwise_wavelength(field, dx, n_pad=4096):
     '''Wavelength of the peak of the y-summed streamwise power spectrum of a
-    complex mode component, from a zero-padded DFT along x (axis 0).'''
-    spec = np.sum(np.abs(np.fft.fft(field, n=n_pad, axis=0))**2, axis=1)
+    complex mode component, from a zero-padded DFT along x (axis 1).'''
+    spec = np.sum(np.abs(np.fft.fft(field, n=n_pad, axis=1))**2, axis=0)
     kx = 2 * np.pi * np.fft.fftfreq(n_pad, dx)
     spec[kx == 0] = 0
     return float(2 * np.pi / abs(kx[np.argmax(spec)]))
@@ -135,9 +135,11 @@ def plot_bispectrum(bmd, path):
 def main(save_dir='example5_out'):
     d = read_data(DATA_PATH)
     dt = float(np.ravel(d['dt'])[0])
-    x1, x2 = np.asarray(d['x'])[:, 0], np.asarray(d['y'])[0, :]
+    # the .mat file is MATLAB's (nx, ny); PyBMD expects (ny, nx)
+    x, y = np.asarray(d['x']).T[0, :], np.asarray(d['y']).T[:, 0]
     data = np.stack([d['u'], d['v']], axis=-1).astype(np.float64)
-    n1, n2, nv = data.shape[1:]
+    data = data.transpose(0, 2, 1, 3)
+    ny, nx, nv = data.shape[1:]
 
     params = dict(
         n_dft=480,                # the reference's df = 1/57.6
@@ -146,7 +148,6 @@ def main(save_dir='example5_out'):
         n_variables=nv,           # q = [u, v], as in the paper
         overlap=50,
         regions=[1, 2],           # sum- and difference-interactions
-        solver='MengiOverton',
         save_modes=False,
         store_modes=False,        # ~43k triads: modes would be ~15 GB
         compute_energy_transfer=False,
@@ -154,7 +155,7 @@ def main(save_dir='example5_out'):
     )
     # bmd.m defaults to a uniform weight and example1.m passes none; B is
     # linear in the weight, so this sets the colour scale
-    weights = utils_weights.uniform((n1, n2), n_vars=nv, dV=1.0)
+    weights = utils_weights.uniform((ny, nx), n_vars=nv, dV=1.0)
 
     # -- Fig. 7: mode bispectrum over the sum and difference regions ---------
     bmd = Standard(params=params, weights=weights).fit(data)
@@ -175,7 +176,7 @@ def main(save_dir='example5_out'):
     )
     bmd_modes = Standard(params=params_modes, weights=weights).fit(data)
 
-    dx = x1[1] - x1[0]
+    dx = x[1] - x[0]
     print('Fig. 8: phi_{k+l}; sym = share of energy even in y '
           '(u: 0 for odd n, 1 for even n; v the opposite)')
     print('   (k, l)   n  |lambda_1|   sym(u)  sym(v)  lambda_x  n*lambda_x')
@@ -192,7 +193,7 @@ def main(save_dir='example5_out'):
               f'{symmetric_fraction(phi[..., 1]):.3f}   '
               f'{lam:7.3f}   {n * lam:7.3f}')
         plot_triad_modes(
-            modes, k, l, x1=x1, x2=x2, vars_idx=(0, 1), figsize=(11, 9),
+            modes, k, l, x=x, y=y, vars_idx=(0, 1), figsize=(11, 9),
             xlabel='$x$', ylabel='$y$', path=save_dir,
             filename=f'modes_k{k}_l{l}.png')
     print(f'max relative difference of |lambda_1| between the two fits: '

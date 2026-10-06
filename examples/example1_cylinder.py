@@ -22,8 +22,8 @@ from examples.data import load_cylinder_wake
 
 def main(save_dir='example1_out'):
     x, y, u, v, dt = load_cylinder_wake()
-    nt, n1, n2 = u.shape
-    print(f'cylinder wake: nt={nt}, grid={n1}x{n2}, dt={dt}')
+    nt, ny, nx = u.shape
+    print(f'cylinder wake: nt={nt}, grid={ny}x{nx} (ny x nx), dt={dt}')
 
     ## single variable: the streamwise velocity
     data = u[..., np.newaxis]
@@ -36,11 +36,10 @@ def main(save_dir='example1_out'):
         overlap=50,
         regions=[1, 2],          # sum- and difference-interactions
         max_freq_idx=12,         # restrict to |k|, |l| <= 12
-        solver='MengiOverton',
         constituent_modes=True,  # also plot phi_k, phi_l alongside phi_{k+l}, phi_{k.l}
         savedir=save_dir,
     )
-    weights = utils_weights.trapz_2d(x[:, 0], y[0, :], n_vars=1)
+    weights = utils_weights.trapz_2d(x[0, :], y[:, 0], n_vars=1)
     bmd = Standard(params=params, weights=weights).fit(data)
 
     ## the strongest triad with k, l both non-zero
@@ -51,7 +50,7 @@ def main(save_dir='example1_out'):
 
     plot_mode_bispectrum(bmd.L, bmd.freq, mark=[(peak['f1'], peak['f2'])],
                          path=save_dir, filename='bispectrum.png')
-    plot_triad_modes(bmd.get_modes_at_freqs(k, l), k, l, x1=x[:, 0], x2=y[0, :],
+    plot_triad_modes(bmd.get_modes_at_freqs(k, l), k, l, x=x[0, :], y=y[:, 0],
                      path=save_dir, filename='modes.png')
     print(f'figures written to {os.path.abspath(save_dir)}')
     return bmd

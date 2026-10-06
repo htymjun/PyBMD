@@ -45,29 +45,22 @@ some triad actually references. With `max_freq_idx` set that is a small fraction
   `n_state > 1` mode. `_unflatten_modes` is the single place a flat mode becomes a field —
   `Cross` overrides it to unflatten as `(n_state, *xshape)` and move the state axis last;
   `tests/test_octave_reference.py`'s CBMD tiers compare the modes against `cbmd.m`.
-  The other hazards are the weights and a user `mean`: both are therefore checked against the
-  full `(*xshape, nv)` shape and a bare flat vector (or the reference's variable-first layout) is
-  **rejected**.
+  The other hazard is the weights: they are therefore checked against the full `(*xshape, nv)`
+  shape and a bare flat vector (or the reference's variable-first layout) is **rejected**.
 - **The reduction accumulates into zeros, not NaN.** `NaN + SUM` poisons every rank. The reference's
   NaN-outside-the-triads semantics is restored *after* the `allreduce`, via `triads.mask`.
 - **Determinism is a requirement, not a nicety.** `tests/test_bmd_mpi.py` asserts bit-identical
-  `L`, `T`, `coeffs` and modes between `mpirun -n 1` and `-n 2`. `optimizers.py` contains no RNG at all — both solvers
-  start from `default_start`'s deterministic angular scan, or an explicit `solver_z0` — so this
-  is structural, not a convention to maintain. Triads are split round-robin because solver cost
+  `L`, `T`, `coeffs` and modes between `mpirun -n 1` and `-n 2`. `optimizers.py` contains no RNG at all — Mengi–Overton
+  needs no start vector — so this is structural, not a convention to maintain. Triads are split round-robin because solver cost
   varies in bands across the `f1`-`f2` plane.
 - **`T` carries no weight**, unlike `B`. That is deliberate and matches the reference — don't
   "fix" it.
 - **`coeffs.npy` is the durable artifact.** Modes are just `Q @ a`, so a large case can run with
   `save_modes=False` and have any triad reconstructed later — by recomputing the DFT rows of that
-  triad and applying `a`; there is no helper for this yet, and `BMDResults` does not load
-  `coeffs.npy`.
-- **`normalize_weights` is variable-wise and therefore `Standard`-only**: CBMD weights have no
-  variable axis, so `Cross` rejects it at construction (the reference has no such option).
-  `apply_normalization` returns a *copy* — the caller's weights dict must survive a `fit()`.
-  `normalize_data` standardizes each point and variable within a block by its standard deviation.
+  triad and applying `a`; there is no helper for this yet.
 - **`store_modes` costs as much as `save_modes`, on every rank** (the full `(n_triads, n_comp,
   *mode_shape)` array plus its `allreduce` buffer, `n_comp` being 2 or 4 with
-  `constituent_modes`); the `max_modes_gb` guard covers both.
+  `constituent_modes`); the `MAX_MODES_GB` (8 GB) guard in `base.py` covers both.
 - **`constituent_modes` is a PyBMD addition, not a reference feature.** `bmd.m` allocates
   `P = zeros(2,nTriads,nx)` and never forms a mode from `Q_hat_f1*a` or `Q_hat_f2*a` alone — only
   their product feeds `B` and `psi_prod`. Setting `params['constituent_modes'] = True` appends
@@ -99,8 +92,7 @@ This is why the two must be applied together, not as alternatives.
    `|‖D‖−1| ≤ sqrt(eps)·‖A‖₁` is absolute; real BMD matrices are tiny (`B` carries `1/n_blocks` and
    the weights), so without rescaling every crossing is rejected. At `‖A‖₁ ~ 1e-6` the solver
    returned 93.7 % of the true value. Power-of-two scaling is exact in binary FP.
-3. Solvers use a deterministic start (`default_start`, a coarse angular scan) instead of a global
-   RNG. `T` is actually computed.
+3. The solver is RNG-free. `T` is actually computed.
 4. `mengi_overton`'s level filter uses `sqrt(eps) * max(w, 1.0)`, not the reference's
    `sqrt(eps) * w` — undocumented until now. It only matters for `w < 1`, i.e. every real BMD
    case, and without it the `max(w,1.0)` clamp would make deviation 2 alone insufficient (see the
@@ -109,59 +101,14 @@ This is why the two must be applied together, not as alternatives.
    crossings from the pencil collapse into one; the reference's plain `unique` keeps them, which
    only costs redundant midpoint tests. Cosmetic — it changes no value.
 
-`simple_iteration` also iterates on the `_pow2_scale`d matrix (returning the Rayleigh quotient on
-the original), otherwise its absolute `|w − w_old| ≤ tol` stopping test fires after one update on
-the tiny matrices BMD produces.
-
-Confirmed live under Octave, for both `bmd.m` and `cbmd.m` (see
-[`tests/octave/octave_cross_validation.md`](../../tests/octave/octave_cross_validation.md)): the reference's actually
-*reachable* solvers are `'MengiOverton'` and `'HeWatson'`. `'simpleIteration'` passes the option
-validator but the inner `switch` has no matching case (`case {'simpleit'}` is what's there instead)
-and errors with `'Unknown solver.'`; `'eig'` fails the same way; `'simpleit'` itself fails the
-validator, one step earlier. So neither spelling of the power-iteration solver is reachable from a
-real `bmd.m`/`cbmd.m` call — `solver='simpleIteration'` in `optimizers.py` reproduces the
-*algorithm* (Watson's simple iteration, Algorithm 1 of the paper's appendix) for regression
-purposes, not a path the reference itself can actually take; it is not globally convergent
-(under-estimated in 14/40 random matrices, worst 62 % low).
-
-**Three solvers are ported: `MengiOverton` (default), `MengiOvertonMATLAB`, and `simpleIteration`.**
-The paper's appendix (`refs/Schmidt_2020_NODY_r2.tex`) actually prescribes He & Watson's nested
-algorithm — `simpleIteration` is its inner loop (Algorithm 1) — but `refs/bmd.m`'s 17-Aug-2023
-revision made Mengi–Overton the standard solver because He–Watson is only locally convergent per
-restart and needs a random start vector to escape local optima, which Mengi–Overton doesn't.
-`he_watson` itself is still not ported: on real BMD matrices it collapses to one Watson simple
-iteration from a random start, because its own unit-circle test (`bmd.m:363`) has the same
-absolute-tolerance bug as `MengiOverton`'s, so its outer level-set loop almost always exits on the
-first pass. PyBMD has no use for a solver that needs an unseeded random start vector when
-`simpleIteration` already reproduces the underlying algorithm deterministically via
-`default_start` — confirmed live on the paper's own hypothesis-test triad case (`tests/test_hypothesis.py`'s
-surrogate-data recipe, run through both implementations; see
-[`tests/octave/octave_cross_validation.md`](../../tests/octave/octave_cross_validation.md)): `simpleIteration` agrees
-with `MengiOverton` everywhere there (max relative deviation
-4.4e-4, 0/780 triads above 1%), while `refs/bmd.m`'s `HeWatson` disagrees with both on up to
-753/780 triads on the flat, non-resonant case — random-start non-convergence on a featureless
-bispectrum, not a meaningful reference value to chase.
-
-`MengiOvertonMATLAB` (`solver='MengiOvertonMATLAB'`, equivalently
-`mengi_overton(..., matlab_compat=True)`) *is* ported, as an explicit opt-in that reverts
-deviations 1/2/4/5 (not 3 — it stays RNG-free, so the determinism requirement above is unaffected)
-and reproduces `refs/bmd/bmd.m`'s own `MengiOverton` instead. It exists only to reproduce a
-specific published MATLAB result, never to analyse new data with, since it reproduces a confirmed
-under-estimation bug. Measured live under Octave on the same 169-triad cylinder-wake fixture cited
-above: max relative deviation from `refs/bmd.m` 3.8e-6 (median 9.6e-16), 0/169 triads above 1%,
-where PyBMD's own `MengiOverton` differs from it by up to 45.6% (52/169 above 1%, as already
-noted). The `only pow2-prescale fix` row cited above is measured on the smaller shipped fixture
-(81 triads, median `‖B‖₁ ~ 2.7e-4`): reverting only `_pow2_scale` leaves a 28.1% max deviation
-from `bmd.m` (vs 66.6% reverting nothing), confirming deviation 2 alone carries essentially the
-whole gap, while reverting only the signed-λ or `max(w,1)` deviations changes PyBMD's own answer
-by <1e-7; all three reverted together reach 4.9e-6. Fidelity degrades as `‖B‖₁` falls toward the
-tolerance floor itself: on the paper's hypothesis-test surrogate, `MengiOvertonMATLAB` reproduces
-`bmd.m`'s `MengiOverton` to 4.4e-15 at `‖B‖₁ ~ 2e-3` (SNR=1) but only within 50% on 9/780 triads
-without noise (`‖B‖₁ ~ 3.5e-9`) — reproducing a branch decision taken exactly at a tolerance
-boundary is inherently unstable across LAPACK builds and language boundaries, and is not a defect
-to chase further. Validated live against Octave in
-`tests/test_octave_reference.py::test_tier_c_matlab_compat_reproduces_reference`; see
-[`tests/octave/octave_cross_validation.md`](../../tests/octave/octave_cross_validation.md) for the figures.
+**Only `MengiOverton` is ported.** The paper's appendix (`refs/Schmidt_2020_NODY_r2.tex`)
+prescribes He & Watson's nested algorithm, but `refs/bmd.m`'s 17-Aug-2023 revision made
+Mengi–Overton the standard solver, since He–Watson is only locally convergent per restart and
+needs an unseeded random start vector. Watson's simple iteration and a bug-compatible
+`MengiOvertonMATLAB` were ported earlier and have been removed to keep the code small; the
+ablation numbers above were measured with them. Under Octave the reference's only reachable
+solvers are `'MengiOverton'` and `'HeWatson'` (`'simpleIteration'` passes the option validator
+but errors with `'Unknown solver.'`), which `tests/test_octave_reference.py` still checks.
 
 ## Conventions that bite
 
@@ -171,7 +118,13 @@ to chase further. Validated live against Octave in
   1-based index copied from MATLAB.
 - Data is always `(nt, *xshape, n_variables)` — variables **last**, for both classes. MATLAB's
   `cbmd.m` puts them second; PyBMD does not.
+- Spatial axes follow NumPy/matplotlib: `xshape = (ny, nx)` in 2-D, `(nz, ny, nx)` in 3-D, x
+  **last**. `trapz_2d(x, y)`/`trapz_3d(x, y, z)` return that shape and `plot_triad_modes` contours
+  `field` untransposed. MATLAB/Fortran arrays are `(nx, ny)` and must be transposed by the caller
+  (`examples/data.py` and `example5` do). The decomposition itself never uses the meaning of an
+  axis — only the plots and the weight constructors do — so `L` and the modes are unchanged by the
+  convention. `tests/test_octave_reference.py` passes the *untransposed* fixture to both `bmd.m`
+  and PyBMD, which is why its `trapz_2d` call takes the last-axis coordinate first.
 - BMD always needs the full two-sided spectrum (difference-interactions use negative
   frequencies), so there is no `rfft` path and no `fullspectrum` option.
-- `Triads.find(k, l)` is the supported way to reach a triad. `linear_idx` exists for MATLAB parity
-  but is **C-order** where MATLAB's `sub2ind` is Fortran-order.
+- `Triads.find(k, l)` is the supported way to reach a triad.

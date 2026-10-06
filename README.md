@@ -137,9 +137,11 @@ and `example5_cylinder_paper.py` (cylinder-wake mode bispectrum and modes, Figs.
 | `max_freq_idx` | `None` | bound on `\|k\|` and `\|l\|`; default is Nyquist |
 | `tol` | `1e-6` | Mengi–Overton solver tolerance |
 | `n_it_max` | `500` | Mengi–Overton iteration cap |
-| `dtype` | `'double'` | `'double'` or `'single'` |
+| `dtype` | `'double'` | `'double'` or `'single'`: precision of the computation |
+| `save_dtype` | `dtype` | `'double'` or `'single'`: precision of the arrays written to disk (`bispectrum.npz`'s `L`/`T`, `coeffs.npy`, `weights.npy`, `ltm_modes.npy`, `modes/`); the frequencies stay double |
 | `save_modes` | `True` | write `modes/triad_idx_{i:08d}.npy` |
 | `store_modes` | `False` | also keep all modes in memory, exposed as `.modes` |
+| `max_modes_gb` | `8.0` | refuse to run if `save_modes`/`store_modes` would keep more than this many GB of modes (on disk at `save_dtype`, in memory at `dtype`); `None` disables the check |
 | `compute_energy_transfer` | `True` | fill the energy-transfer term `T` |
 | `savedir` | `'bmd_results'` | results directory |
 

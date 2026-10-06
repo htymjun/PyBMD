@@ -60,7 +60,9 @@ some triad actually references. With `max_freq_idx` set that is a small fraction
   triad and applying `a`; there is no helper for this yet.
 - **`store_modes` costs as much as `save_modes`, on every rank** (the full `(n_triads, n_comp,
   *mode_shape)` array plus its `allreduce` buffer, `n_comp` being 2 or 4 with
-  `constituent_modes`); the `MAX_MODES_GB` (8 GB) guard in `base.py` covers both.
+  `constituent_modes`); the `params['max_modes_gb']` guard (default `MAX_MODES_GB`, 8 GB; `None`
+  disables it) in `base.py` covers both, sizing `save_modes` at `save_dtype` and `store_modes` at
+  `dtype`.
 - **`constituent_modes` is a PyBMD addition, not a reference feature.** `bmd.m` allocates
   `P = zeros(2,nTriads,nx)` and never forms a mode from `Q_hat_f1*a` or `Q_hat_f2*a` alone — only
   their product feeds `B` and `psi_prod`. Setting `params['constituent_modes'] = True` appends

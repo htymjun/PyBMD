@@ -18,7 +18,8 @@ import pybmd.utils.io as utils_io
 import pybmd.utils.parallel as utils_par
 
 B2GB = 9.3132257461548e-10
-# above this, keeping every mode (save_modes/store_modes) is refused
+# default for params['max_modes_gb']: above this, keeping every mode
+# (save_modes/store_modes) is refused
 MAX_MODES_GB = 8.0
 
 
@@ -86,10 +87,15 @@ class Base():
 
         ##--- optional: storage
         self._dtype = params.get('dtype', 'double')
+        # precision of the arrays written to disk; default follows `dtype`.
+        # 'single' halves the files while the computation stays at `dtype`
+        self._save_dtype = params.get('save_dtype', None) or self._dtype
         # resolve against the working directory at construction, not at import
         self._savedir = os.path.abspath(params.get('savedir', 'bmd_results'))
         self._save_modes = params.get('save_modes', True)
         self._store_modes = params.get('store_modes', False)
+        # None disables the check
+        self._max_modes_gb = params.get('max_modes_gb', MAX_MODES_GB)
         # opt-in: also compute and store the two constituent modes phi_k,
         # phi_l alongside the sum and quadratic-term modes
         self._constituent_modes = params.get('constituent_modes', False)
@@ -103,6 +109,8 @@ class Base():
         self._weights_tmp = weights
         self._comm = comm
         self._float, self._complex = utils_bmd._get_dtype(self._dtype)
+        self._save_float, self._save_complex = utils_bmd._get_dtype(
+            self._save_dtype)
 
         ## define rank and size for both parallel and serial
         if self._comm is not None:
@@ -452,15 +460,24 @@ class Base():
         self._qhat_size_gb = (self._triads.freq_needed.size * self._nxv
                               * self._n_blocks
                               * self._complex(1).nbytes * B2GB)
+        # modes are held in memory at `dtype` but written at `save_dtype`;
+        # size the check by the larger of the footprints actually incurred
+        itemsizes = []
+        if self._store_modes:
+            itemsizes.append(self._complex(1).nbytes)
+        if self._save_modes:
+            itemsizes.append(self._save_complex(1).nbytes)
         self._modes_size_gb = (self._n_mode_comp * self.n_triads
                                * int(np.prod(self._mode_shape))
-                               * self._complex(1).nbytes * B2GB)
-        if ((self._save_modes or self._store_modes)
-                and self._modes_size_gb > MAX_MODES_GB):
+                               * max(itemsizes, default=0) * B2GB)
+        if (self._max_modes_gb is not None
+                and self._modes_size_gb > self._max_modes_gb):
             raise ValueError(
                 f'Keeping all modes would need {self._modes_size_gb:.2f} GB '
                 f'(on disk with save_modes, and on every rank with '
-                f'store_modes), above the limit of {MAX_MODES_GB:.2f} GB. Set '
+                f'store_modes), above the limit of {self._max_modes_gb:.2f} '
+                f'GB. Raise params["max_modes_gb"] (None disables the check), '
+                f'set params["save_dtype"] to "single", or set '
                 f'params["save_modes"] and params["store_modes"] to False to '
                 f'store only the coefficients.')
 
@@ -651,7 +668,7 @@ class Base():
         '''Write the modes ``(n_comp, *mode_shape)`` of one triad to
         ``modes/triad_idx_{i:08d}.npy``.'''
         path = os.path.join(self._modes_dir, f'triad_idx_{i_triad:08d}.npy')
-        np.save(path, psi)
+        np.save(path, self._to_save_dtype(psi))
 
     def get_modes_at_triad(self, triad_idx):
         '''
@@ -710,13 +727,16 @@ class Base():
             # arrays first: the YAML dump is the one step that can fail on an
             # unexpected value type, and it must not take the results with it
             np.savez(os.path.join(self._savedir_sim, 'bispectrum.npz'),
-                     L=self._L, T=self._T, freq=self.freq, f_idx=self.f_idx)
+                     L=self._to_save_dtype(self._L),
+                     T=self._to_save_dtype(self._T),
+                     freq=self.freq, f_idx=self.f_idx)
             self._triads.to_npz(os.path.join(self._savedir_sim, 'triads.npz'))
-            np.save(os.path.join(self._savedir_sim, 'coeffs.npy'), self._coeffs)
+            np.save(os.path.join(self._savedir_sim, 'coeffs.npy'),
+                    self._to_save_dtype(self._coeffs))
             np.save(os.path.join(self._savedir_sim, 'weights.npy'),
-                    self._weights)
+                    self._to_save_dtype(self._weights))
             np.save(os.path.join(self._savedir_sim, 'ltm_modes.npy'),
-                    self._t_mean)
+                    self._to_save_dtype(self._t_mean))
             path_params = os.path.join(self._savedir_sim, 'params_modes.yaml')
             with open(path_params, 'w') as f:
                 yaml.dump(_yaml_safe(self._params), f)
@@ -737,6 +757,14 @@ class Base():
             return d.astype(self._float)
         return d
 
+    def _to_save_dtype(self, d):
+        '''Cast a result array to the on-disk precision (``save_dtype``).'''
+        if np.issubdtype(d.dtype, np.complexfloating):
+            return d.astype(self._save_complex, copy=False)
+        if np.issubdtype(d.dtype, np.floating):
+            return d.astype(self._save_float, copy=False)
+        return d
+
     def _print_parameters(self):
         '''Display parameter summary.'''
         self._pr0(f'')
@@ -748,6 +776,7 @@ class Base():
         self._pr0(f'Constituent modes        : {self._constituent_modes}')
         self._pr0(f'Data type for real       : {self._float}')
         self._pr0(f'Data type for complex    : {self._complex}')
+        self._pr0(f'Data type on disk        : {self._save_dtype}')
         self._pr0(f'No. snapshots per block  : {self._n_dft}')
         self._pr0(f'Block overlap            : {self._n_overlap}')
         self._pr0(f'No. of blocks            : {self._n_blocks}')

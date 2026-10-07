@@ -116,10 +116,11 @@ def triad_label(k, l):
 
 
 def plot_mode_bispectrum(L, freq, log=True, levels=None, xlim=None, ylim=None,
-                         cmap='jet', mark=None, figsize=(6, 6), title='',
+                         cmap='jet', mark=None, figsize=(6, 6), 
                          xlabel=r'$f_1$', ylabel=r'$f_2$', path=None,
                          filename=None, ax=None, extend='both',
-                         extendrect=True, cbar_label=None):
+                         extendrect=True, cbar_label=None, vmin=None,
+                         vmax=None, ticks=None):
     '''
     Contour the mode bispectrum over the ``f1``-``f2`` plane.
 
@@ -138,6 +139,11 @@ def plot_mode_bispectrum(L, freq, log=True, levels=None, xlim=None, ylim=None,
         if omitted. ``filename`` is honoured either way; the figure is only
         closed when this call created it.
     :param str cbar_label: colorbar label. Default names ``|lambda_1|``.
+    :param float vmin: lower end of the colour scale, in the plotted units
+        (``log|L|`` if ``log``). Default is the data's minimum.
+    :param float vmax: upper end of the colour scale. Default is the data's
+        maximum. With an integer ``levels``, the levels span ``[vmin, vmax]``.
+    :param ticks: colorbar ticks. Default lets matplotlib choose.
 
     :return: the axes drawn on.
     :rtype: matplotlib.axes.Axes
@@ -152,16 +158,20 @@ def plot_mode_bispectrum(L, freq, log=True, levels=None, xlim=None, ylim=None,
     field = np.ma.masked_invalid(field)
     if levels is None:
         levels = 100
+    if np.ndim(levels) == 0 and (vmin is not None or vmax is not None):
+        lo = field.min() if vmin is None else vmin
+        hi = field.max() if vmax is None else vmax
+        levels = np.linspace(lo, hi, int(levels) + 1)
     if cbar_label is None:
         cbar_label = r'$\log|\lambda_1|$' if log else r'$|\lambda_1|$'
 
     created = ax is None
     if created:
         _, ax = plt.subplots(figsize=figsize)
-    im = ax.contourf(f1, f2, field, levels=levels, cmap=cmap, extend=extend)
+    im = ax.contourf(f1, f2, field, levels=levels, cmap=cmap, extend=extend,
+                     vmin=vmin, vmax=vmax)
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
-    ax.set_title(title or 'Mode bispectrum')
     ax.set_aspect('equal')
 
     # default to the extent of the computed triads, which is usually a small
@@ -180,7 +190,8 @@ def plot_mode_bispectrum(L, freq, log=True, levels=None, xlim=None, ylim=None,
         for m_f1, m_f2 in mark:
             ax.plot(m_f1, m_f2, 'o', ms=8, mfc='none', mec='k', mew=1.5)
 
-    ax.figure.colorbar(im, ax=ax, extendrect=extendrect, label=cbar_label)
+    ax.figure.colorbar(im, ax=ax, extendrect=extendrect, label=cbar_label,
+                       ticks=ticks)
     if filename:
         _save_figure(ax.figure, filename, path)
         if created:

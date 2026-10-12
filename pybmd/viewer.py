@@ -5,17 +5,24 @@ The directories are the ones written by ``pybmd.bmd.postproc.export_triads``. Ne
 
 Usage:
     pybmd-viewer ROOT_DIR [-o liked_triads.txt]
+    pybmd-viewer ROOT_DIR --export-liked [-o liked_triads.txt]   # PNGs only, no GUI
 
 If ROOT_DIR/bmd.pkl or its parent's (a pickled, fitted pybmd Standard/Cross) exists, its mode
 bispectrum, normalised by its maximum, is shown with the current triad marked. Click a cell to
 jump to that triad; drag a rectangle to zoom in.
 
+Export (e, or --export-liked for every liked triad) writes ROOT/<triad dir name>.png: the four
+images in a 2x2 grid, and, with a fit, the whole bispectrum above a ZOOM_CELLS x ZOOM_CELLS cell
+close-up of the triad.
+
 Keys:
     k / Right : next        j / Left : previous
     l         : like toggle Home / End : first / last
+    e         : export PNG
     Esc       : quit (liked list is saved and printed)
 """
 import argparse
+import os
 import pickle
 import re
 import sys
@@ -38,7 +45,12 @@ ROLES = ("k", "l", "kl")  # f_k + f_l = f_kl
 FREQ_TOL = 2e-3  # three frequencies each rounded to 3 decimals: |error| <= 1.5e-3
 CACHE_SIZE = 64
 DRAG_PX = 5  # a press/release closer than this (pixels) is a click, not a zoom drag
-KEY_GUIDE = ("Keys:   k / → : next     j / ← : previous     l : like     "
+ZOOM_CELLS = 16  # side of the exported bispectrum close-up, in frequency cells
+BISPEC_RC = {"font.family": "serif",
+             "font.serif": ["Times New Roman", "Times", "Nimbus Roman", "Liberation Serif",
+                            "DejaVu Serif"],
+             "mathtext.fontset": "stix"}  # exported bispectrum only; the GUI keeps its fonts
+KEY_GUIDE = ("Keys:   k / → : next     j / ← : previous     l : like     e : export PNG     "
              "Home / End : first / last     Esc : quit     "
              "(bispectrum: click to jump, drag to zoom)")
 
@@ -127,6 +139,131 @@ def load_bmd(root: Path):
     return None
 
 
+def read_liked(path: Path):
+    """Resolved triad paths of a liked file (the last tab-separated field), in order. The
+    paths are relative to the liked file's directory; absolute ones (older files) also work."""
+    if not path.exists():
+        return []
+    return [(path.parent / line.split("\t")[-1]).resolve()
+            for line in path.read_text().splitlines() if line.strip()]
+
+
+def liked_line(p: Path, liked_path: Path, freq=""):
+    """One liked-file line: name, frequencies, path relative to the liked file's directory."""
+    return f"{p.name}\t{freq}\t{Path(os.path.relpath(p, liked_path.parent)).as_posix()}"
+
+
+def match_liked(paths, triads):
+    """Map liked PATHS onto TRIADS: by resolved path, else by directory name, so likes survive
+    moving or copying the triad directories. Paths matching neither are kept as they are."""
+    current = {t.path for t in triads}
+    by_name = {t.name: t.path for t in triads}
+    matched = []
+    for p in paths:
+        q = p if p in current else by_name.get(p.name, p)
+        if q not in matched:
+            matched.append(q)
+    return matched
+
+
+def bmd_point(bmd, t):
+    """(f1, f2) of a triad on the bispectrum: from the dir name, else the file names."""
+    if t.kl_idx is not None:
+        f_idx = np.asarray(bmd.f_idx)
+        ik, il = (np.flatnonzero(f_idx == v) for v in t.kl_idx)
+        if ik.size and il.size:
+            return float(bmd.freq[ik[0]]), float(bmd.freq[il[0]])
+    if "k" in t.modes and "l" in t.modes:
+        return t.modes["k"][0], t.modes["l"][0]
+    return None
+
+
+def zoom_window(point, df, home):
+    """(xlim, ylim) of ZOOM_CELLS cells around POINT, on cell edges, shifted inside HOME."""
+    lims = []
+    for c, (lo, hi) in zip(point, home):
+        width = ZOOM_CELLS * df
+        if hi - lo <= width:
+            lims.append((lo, hi))
+            continue
+        a = c - df / 2 - (ZOOM_CELLS // 2) * df
+        a = min(max(a, lo), hi - width)
+        lims.append((a, a + width))
+    return tuple(lims)
+
+
+def draw_bispectrum(ax_full, ax_zoom, bmd, point):
+    """The whole bispectrum on AX_FULL, with the close-up's extent outlined, and the close-up
+    of POINT on AX_ZOOM, with its cell outlined. Returns the two rectangles."""
+    from matplotlib.patches import Rectangle
+
+    freq = np.asarray(bmd.freq, dtype=float)
+    df = freq[1] - freq[0]
+    for ax in (ax_full, ax_zoom):
+        plot_mode_bispectrum(bmd.L, freq, normalize=True, ax=ax, extend='neither')
+    if point is None:
+        return None, None
+    home = (ax_full.get_xlim(), ax_full.get_ylim())
+    (x0, x1), (y0, y1) = zoom_window(point, df, home)
+    ax_zoom.set_xlim(x0, x1)
+    ax_zoom.set_ylim(y0, y1)
+    region = Rectangle((x0, y0), x1 - x0, y1 - y0, fill=False, edgecolor="black", linewidth=1)
+    ax_full.add_patch(region)
+    cell = Rectangle((point[0] - df / 2, point[1] - df / 2), df, df, fill=False,
+                     edgecolor="black", linewidth=2)
+    ax_zoom.add_patch(cell)
+    return region, cell
+
+
+def export_triad_png(triad, bmd=None, path=None):
+    """Write the triad's four images (k l / kl psi) and, with BMD, the bispectrum and its
+    close-up as one PNG, by default next to the triad directory as <dir name>.png."""
+    from matplotlib import rc_context
+    from matplotlib.figure import Figure
+    from matplotlib.image import imread
+
+    path = Path(path) if path else triad.path.parent / f"{triad.name}.png"
+    files = [triad.modes[r][2] if r in triad.modes else None for r in ROLES] + [triad.psi]
+    images = [None if f is None else imread(str(f)) for f in files]
+    shapes = [im.shape for im in images if im is not None]
+    h_px, w_px = shapes[0][:2] if shapes else (100, 100)
+    row_in = 3.0  # inches per image row; the dpi keeps the images near 1:1 pixels
+    aspect = w_px / h_px
+    ratios = [aspect, aspect] + ([1.4] if bmd is not None else [])
+    with rc_context(BISPEC_RC):
+        fig = Figure(figsize=(row_in * sum(ratios), 2 * row_in), layout="constrained")
+        fig.get_layout_engine().set(w_pad=0.01, h_pad=0.01, wspace=0, hspace=0)
+        gs = fig.add_gridspec(2, len(ratios), width_ratios=ratios)
+        for i, im in enumerate(images):
+            ax = fig.add_subplot(gs[i // 2, i % 2])
+            ax.axis("off")
+            if im is not None:
+                ax.imshow(im)
+        if bmd is not None:
+            draw_bispectrum(fig.add_subplot(gs[0, 2]), fig.add_subplot(gs[1, 2]), bmd,
+                            bmd_point(bmd, triad))
+        fig.savefig(path, dpi=max(100, h_px / row_in), bbox_inches="tight", pad_inches=0.02)
+    return path
+
+
+def export_liked(root, liked_path=None, bmd=None):
+    """Export every liked triad of ROOT with export_triad_png; returns the written paths."""
+    root = Path(root).resolve()
+    liked_path = Path(liked_path) if liked_path else root / "liked_triads.txt"
+    if bmd is None:
+        bmd = load_bmd(root)
+    triads = find_triads(root)
+    by_path = {t.path: t for t in triads}
+    written = []
+    for p in match_liked(read_liked(liked_path), triads):
+        if p not in by_path:
+            print(f"Warning: liked triad not found under {root}: {p}", file=sys.stderr)
+            continue
+        written.append(export_triad_png(by_path[p], bmd))
+        print(f"wrote {written[-1]}")
+    return written
+
+
 class ImagePanel(QWidget):
     """Caption + image that rescales with the window, keeping aspect ratio."""
 
@@ -195,7 +332,7 @@ class BispectrumPanel(QWidget):
         ax = fig.add_subplot()
         plot_mode_bispectrum(bmd.L, freq, normalize=True, ax=ax, extend='neither')
         self.marker = Rectangle((0, 0), self.df, self.df, fill=False,
-                                edgecolor="magenta", linewidth=2.5, visible=False)
+                                edgecolor="black", linewidth=2.5, visible=False)
         ax.add_patch(self.marker)
         self.rubber = Rectangle((0, 0), 0, 0, fill=True, facecolor=(0, 0, 0, 0.1),
                                 edgecolor="black", linestyle="--", visible=False)
@@ -311,6 +448,8 @@ class TriadViewer(QMainWindow):
         self.title.setFont(font)
         self.warn = QLabel()
         self.warn.setStyleSheet("color: #c00; font-weight: bold;")
+        self.status = QLabel()
+        self.status.setStyleSheet("color: #555;")
 
         # 2x2 grid: k l / kl psi
         self.panels = [ImagePanel() for _ in range(4)]
@@ -334,7 +473,7 @@ class TriadViewer(QMainWindow):
         if bmd is not None:
             self.bispec = BispectrumPanel(bmd)
             self.bispec.clicked.connect(self._jump_to_freq)
-            self._points = [self._bmd_point(t) for t in triads]
+            self._points = [bmd_point(bmd, t) for t in triads]
             self._by_kl = {t.kl_idx: i for i, t in enumerate(triads) if t.kl_idx}
             right = QSplitter(Qt.Vertical)
             right.addWidget(self.bispec)
@@ -359,17 +498,22 @@ class TriadViewer(QMainWindow):
         self.like_btn = QPushButton()
         self.like_btn.setToolTip("Toggle like  [l]")
         self.like_btn.clicked.connect(self.toggle_like)
+        self.export_btn = QPushButton("Export (e)")
+        self.export_btn.setToolTip("Save the images and bispectrum as one PNG next to the "
+                                   "triad directory  [e]")
+        self.export_btn.clicked.connect(self.export_current)
         self.slider = QSlider(Qt.Horizontal)
         self.slider.setRange(0, max(len(triads) - 1, 0))
         self.slider.setToolTip("Drag to move  [Home / End: first / last]")
         self.slider.valueChanged.connect(self.go)
-        for w in (self.prev_btn, self.next_btn, self.like_btn, self.slider):
+        for w in (self.prev_btn, self.next_btn, self.like_btn, self.export_btn, self.slider):
             w.setFocusPolicy(Qt.NoFocus)
         controls = QHBoxLayout()
         controls.addWidget(self.prev_btn)
         controls.addWidget(self.next_btn)
         controls.addWidget(self.slider, 1)
         controls.addWidget(self.like_btn)
+        controls.addWidget(self.export_btn)
 
         guide = QLabel(KEY_GUIDE)
         guide.setStyleSheet("color: #555; padding: 4px; background: #eee; border-radius: 4px;")
@@ -378,6 +522,7 @@ class TriadViewer(QMainWindow):
         layout = QVBoxLayout(central)
         layout.addWidget(self.title)
         layout.addWidget(self.warn)
+        layout.addWidget(self.status)
         layout.addWidget(splitter, 1)
         layout.addLayout(controls)
         layout.addWidget(guide)
@@ -387,6 +532,7 @@ class TriadViewer(QMainWindow):
             (("K", "Right"), lambda: self.go(self.index + 1)),
             (("J", "Left"), lambda: self.go(self.index - 1)),
             (("L",), self.toggle_like),
+            (("E",), self.export_current),
             (("Home",), lambda: self.go(0)),
             (("End",), lambda: self.go(len(self.triads) - 1)),
             (("Esc",), self.close),
@@ -404,6 +550,7 @@ class TriadViewer(QMainWindow):
         if i == self.index:
             return
         self.index = i
+        self.status.clear()
         self.show_current()
 
     def show_current(self):
@@ -455,17 +602,6 @@ class TriadViewer(QMainWindow):
                     self._pixmap(p)
 
     # ---- bispectrum -------------------------------------------------------
-    def _bmd_point(self, t):
-        """(f1, f2) of a triad on the bispectrum: from the dir name, else the file names."""
-        if t.kl_idx is not None:
-            f_idx = np.asarray(self.bmd.f_idx)
-            ik, il = (np.flatnonzero(f_idx == v) for v in t.kl_idx)
-            if ik.size and il.size:
-                return float(self.bmd.freq[ik[0]]), float(self.bmd.freq[il[0]])
-        if "k" in t.modes and "l" in t.modes:
-            return t.modes["k"][0], t.modes["l"][0]
-        return None
-
     def _jump_to_freq(self, x, y):
         freq = np.asarray(self.bmd.freq)
         f_idx = np.asarray(self.bmd.f_idx)
@@ -477,6 +613,12 @@ class TriadViewer(QMainWindow):
                  for p in self._points]
         if np.isfinite(min(dists)):
             self.go(int(np.argmin(dists)))
+
+    # ---- export -----------------------------------------------------------
+    def export_current(self):
+        path = export_triad_png(self.triads[self.index], self.bmd)
+        self.status.setText(f"Exported: {path}")
+        print(f"wrote {path}")
 
     # ---- likes ------------------------------------------------------------
     def toggle_like(self):
@@ -495,20 +637,14 @@ class TriadViewer(QMainWindow):
         for p in self.liked:
             t = by_path.get(p)
             freq = t.freq_text() if t else ""
-            lines.append(f"{p.name}\t{freq}\t{p}")
+            lines.append(liked_line(p, self.liked_path, freq))
         return lines
 
     def _save_liked(self):
         self.liked_path.write_text("".join(l + "\n" for l in self._liked_lines()))
 
     def _load_liked(self):
-        if not self.liked_path.exists():
-            return []
-        liked = []
-        for line in self.liked_path.read_text().splitlines():
-            if line.strip():
-                liked.append(Path(line.split("\t")[-1]).resolve())
-        return liked
+        return match_liked(read_liked(self.liked_path), self.triads)
 
     def _refresh_liked_list(self):
         self.liked_list.clear()
@@ -548,13 +684,18 @@ def view_triads(root, liked_path=None, bmd=None):
     return app.exec_()
 
 
-def main():
+def main(argv=None):
     ap = argparse.ArgumentParser(
         prog="pybmd-viewer", description="Browse triad_* directories and mark favourites.")
     ap.add_argument("root", type=Path, help="directory containing triad_* directories")
     ap.add_argument("-o", "--output", type=Path, default=None,
                     help="liked list file (default: ROOT/liked_triads.txt)")
-    args = ap.parse_args()
+    ap.add_argument("--export-liked", action="store_true",
+                    help="write ROOT/<triad>.png for every liked triad and exit (no GUI)")
+    args = ap.parse_args(argv)
+    if args.export_liked:
+        export_liked(args.root, args.output)
+        return
     sys.exit(view_triads(args.root, args.output))
 
 

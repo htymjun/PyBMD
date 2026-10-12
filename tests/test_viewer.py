@@ -91,6 +91,7 @@ def test_viewer_navigation(tmp_path):
     QTest.keyClick(w, Qt.Key_L)
     t = w.triads[1]
     assert liked.read_text().split('\t')[0] == t.name
+    assert liked.read_text().split('\t')[-1].strip() == f'triads/{t.name}'  # relative
 
     # the marker outlines the current triad's cell
     i = bmd.find_triad(*t.kl_idx)
@@ -98,5 +99,58 @@ def test_viewer_navigation(tmp_path):
     x0, y0 = w.bispec.marker.get_xy()
     assert np.allclose((x0 + df / 2, y0 + df / 2),
                        (bmd.triads.f1[i], bmd.triads.f2[i]))
+    assert w.bispec.marker.get_edgecolor()[:3] == (0, 0, 0)
+
+    # export goes next to the triad directory, named after it
+    QTest.keyClick(w, Qt.Key_E)
+    assert plt.imread(triads_dir / f'{t.name}.png').ndim == 3
     w.close()
     app.processEvents()
+
+
+def test_zoom_window():
+    viewer = _viewer_module()
+    n, df = viewer.ZOOM_CELLS, 0.1
+    home = ((-0.05, 9.95), (-0.05, 9.95))
+    (x0, x1), (y0, y1) = viewer.zoom_window((5.0, 0.0), df, home)
+    assert np.isclose(x1 - x0, n * df) and x0 < 5.0 < x1
+    assert np.isclose(y0, -0.05) and np.isclose(y1 - y0, n * df)   # shifted inside
+    small = ((0.0, 0.5), (0.0, 0.5))
+    assert viewer.zoom_window((0.2, 0.2), df, small) == small
+
+
+def test_export_png_and_liked_command(tmp_path):
+    viewer = _viewer_module()
+    bmd = _fit(tmp_path)
+    export_triads(bmd, str(tmp_path), np.arange(5), np.arange(6))
+    triads_dir = tmp_path / 'triads'
+    triads = viewer.find_triads(triads_dir)
+
+    # the close-up outlines the triad's cell, the whole map outlines the close-up
+    fig, (ax_full, ax_zoom) = plt.subplots(2)
+    t = triads[0]
+    point = viewer.bmd_point(bmd, t)
+    region, cell = viewer.draw_bispectrum(ax_full, ax_zoom, bmd, point)
+    x0, y0 = region.get_xy()
+    assert np.allclose((x0, x0 + region.get_width()), ax_zoom.get_xlim())
+    assert np.allclose((y0, y0 + region.get_height()), ax_zoom.get_ylim())
+    df = bmd.freq[1] - bmd.freq[0]
+    assert np.allclose(np.add(cell.get_xy(), df / 2), point)
+    plt.close(fig)
+
+    assert viewer.export_triad_png(t, None) == triads_dir / f'{t.name}.png'
+
+    liked = tmp_path / 'liked.txt'
+    liked.write_text(''.join(viewer.liked_line(u.path, liked) + '\n' for u in triads[1:3]))
+    assert '\ttriads/triad_' in liked.read_text()     # relative to the liked file
+    written = viewer.export_liked(triads_dir, liked, bmd)
+    assert written == [triads_dir / f'{u.name}.png' for u in triads[1:3]]
+    viewer.main([str(triads_dir), '--export-liked', '-o', str(liked)])
+    for path in written:
+        assert plt.imread(path).ndim == 3
+
+    # likes recorded before the triad directories were moved still match, by name
+    moved = tmp_path / 'old_location' / triads[1].name
+    liked.write_text(f'{triads[1].name}\t\t{moved}\n')
+    assert viewer.match_liked(viewer.read_liked(liked), triads) == [triads[1].path]
+    assert viewer.export_liked(triads_dir, liked, bmd) == [written[0]]

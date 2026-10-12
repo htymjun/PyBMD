@@ -214,13 +214,27 @@ pybmd-viewer DIR/triads -o my_likes.txt  # or to a file of your choice
 | `k` / `→` | next triad |
 | `j` / `←` | previous triad |
 | `l` | like / unlike |
+| `e` | export the current triad as one PNG |
 | `Home` / `End` | first / last |
 | `Esc` | quit (the liked list is saved and printed) |
 
 On the bispectrum, click a cell to jump to that triad, or drag a rectangle to zoom in. The
 `Undo zoom` and `Reset view` buttons undo the zoom. Double-click a liked triad in the list to
 jump to it. The liked file is tab-separated, one line per triad: `name`, the frequencies, then
-the absolute path. It is saved on every toggle and reloaded at startup.
+the triad directory's path relative to the liked file, so the likes survive moving the whole
+directory. It is saved on every toggle and reloaded at startup. Older files with absolute paths
+still load, and a path that no longer exists is matched by the directory name.
+
+**4. Export.** `e` writes the current triad as one PNG next to its directory, named after it:
+`DIR/triads/triad_k5_l-2.png`. The four images fill a 2x2 grid with no captions, and, when
+`bmd.pkl` was found, a column on the right shows the whole bispectrum (the close-up's extent
+outlined in black) above a 16 x 16 cell close-up of the triad (its cell outlined in black), in
+Times New Roman. To export every liked triad without opening the GUI:
+
+```bash
+pybmd-viewer DIR/triads --export-liked                  # likes from DIR/triads/liked_triads.txt
+pybmd-viewer DIR/triads --export-liked -o my_likes.txt  # or from a file of your choice
+```
 
 For example, on the cylinder wake (needs `git submodule update --init`):
 

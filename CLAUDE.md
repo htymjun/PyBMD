@@ -77,13 +77,21 @@ together. UI strings and comments are English.
 - `load_bmd()` unpickles `ROOT/bmd.pkl` or its parent's. `TRIAD_DIR_RE`'s integer (k, l) map to
   the (f1, f2) plane through `bmd.f_idx`/`bmd.freq`, falling back to the filename frequencies.
   `BispectrumPanel` draws through `plot_mode_bispectrum(..., normalize=True, ax=ax)`, outlines
-  the current cell, zooms on a drag of at least `DRAG_PX` pixels with an undo stack, and jumps
+  the current cell in black, zooms on a drag of at least `DRAG_PX` pixels with an undo stack, and jumps
   on a click.
 - Navigation is manual only; the user explicitly does not want autoplay. Keys are `QShortcut`s
   on the window, and every button, slider and list is `Qt.NoFocus` so no widget swallows them.
   Key bindings must stay visible in three places: button labels, tooltips and `KEY_GUIDE`.
-- Likes are keyed by resolved path. They are saved on every toggle as
-  `name\tk=.. l=.. kl=..\tabs_path`, and the last field is what is reloaded.
+- Export (`e`, or `pybmd-viewer ROOT --export-liked` without the GUI) is `export_triad_png`:
+  matplotlib only (no Qt), it writes `ROOT/<triad dir name>.png` -- the four images 2x2 without
+  captions, plus `draw_bispectrum`'s whole map above a `ZOOM_CELLS` (16) cell close-up
+  (`zoom_window`, on cell edges, shifted inside the computed extent). The `BISPEC_RC` Times
+  font applies to the export only; the GUI's layout and fonts are unchanged by request.
+- Likes are keyed by resolved path in memory. They are saved on every toggle as
+  `name\tk=.. l=.. kl=..\trel_path` (`liked_line`; relative to the liked file's directory, so
+  moving the tree keeps them), and the last field is what is reloaded (`read_liked`, which also
+  takes old absolute paths). `match_liked` then falls back to the directory name for paths that
+  no longer exist.
 - To check the GUI headlessly, set `QT_QPA_PLATFORM=offscreen`, then call
   `QApplication.setActiveWindow(w)` before `QTest.keyClick`; shortcuts ignore inactive windows.
 

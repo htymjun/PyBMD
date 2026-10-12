@@ -1,7 +1,7 @@
 '''
 Module implementing bispectrum-specific post-processing of a fitted
-``Standard``/``Cross``: the strongest triads, the mode bispectrum map over the
-``f1``-``f2`` plane, and the mode panels for a chosen triad.
+``Standard``/``Cross``: the strongest triads, the discrete mode bispectrum map
+over the ``f1``-``f2`` plane, and the mode panels for a chosen triad.
 '''
 import os
 
@@ -116,23 +116,24 @@ def triad_label(k, l):
 
 
 def plot_mode_bispectrum(L, freq, log=True, levels=None, xlim=None, ylim=None,
-                         cmap='jet', mark=None, figsize=(6, 6), 
+                         cmap='jet', mark=None, figsize=(6, 6),
                          xlabel=r'$f_1$', ylabel=r'$f_2$', path=None,
                          filename=None, ax=None, extend='both',
                          extendrect=True, cbar_label=None, vmin=None,
-                         vmax=None, ticks=None):
+                         vmax=None, ticks=None, normalize=False, title=None):
     '''
-    Contour the mode bispectrum over the ``f1``-``f2`` plane.
+    Map the mode bispectrum over the ``f1``-``f2`` plane, one cell per
+    frequency pair.
 
     :param numpy.ndarray L: the bispectrum, of shape ``(n_freq, n_freq)``.
         Entries outside the computed triads are expected to be NaN and are
-        masked out.
+        left blank.
     :param numpy.ndarray freq: the frequency axis.
     :param bool log: plot ``log|L|`` rather than ``|L|``. Default is True.
-    :param levels: contour levels, or the number of them. Default is 100.
+    :param levels: colour-band boundaries, or the number of bands between
+        ``vmin`` and ``vmax``. Default is None, a continuous colour scale.
     :param mark: triads to annotate, as a list of ``(f1, f2)`` pairs.
-    :param str extend: contour extension mode. Default is ``'both'`` so values
-        outside explicit contour levels are still colored.
+    :param str extend: colorbar extension mode. Default is ``'both'``.
     :param bool extendrect: draw colorbar extensions as rectangles rather than
         triangles. Default is True.
     :param matplotlib.axes.Axes ax: axes to draw on. A new figure is created
@@ -142,45 +143,61 @@ def plot_mode_bispectrum(L, freq, log=True, levels=None, xlim=None, ylim=None,
     :param float vmin: lower end of the colour scale, in the plotted units
         (``log|L|`` if ``log``). Default is the data's minimum.
     :param float vmax: upper end of the colour scale. Default is the data's
-        maximum. With an integer ``levels``, the levels span ``[vmin, vmax]``.
+        maximum.
     :param ticks: colorbar ticks. Default lets matplotlib choose.
+    :param bool normalize: divide ``|L|`` by its maximum over the computed
+        triads, so the peak is ``log 1 = 0``. Default is False.
+    :param str title: axes title. Default is none.
 
     :return: the axes drawn on.
     :rtype: matplotlib.axes.Axes
     '''
     import matplotlib.pyplot as plt
+    from matplotlib.colors import BoundaryNorm, Normalize
 
-    f1, f2 = np.meshgrid(freq, freq, indexing='ij')
-    field = np.abs(L)
+    freq = np.asarray(freq, dtype=float)
+    df = freq[1] - freq[0]
+    edges = np.append(freq - df / 2, freq[-1] + df / 2)
+    field = np.abs(np.asarray(L))
+    valid = np.isfinite(field)
+    if normalize and valid.any() and field[valid].max() > 0:
+        field = field / field[valid].max()
     if log:
         with np.errstate(divide='ignore', invalid='ignore'):
             field = np.log(field)
     field = np.ma.masked_invalid(field)
+    lo = field.min() if vmin is None else vmin
+    hi = field.max() if vmax is None else vmax
     if levels is None:
-        levels = 100
-    if np.ndim(levels) == 0 and (vmin is not None or vmax is not None):
-        lo = field.min() if vmin is None else vmin
-        hi = field.max() if vmax is None else vmax
-        levels = np.linspace(lo, hi, int(levels) + 1)
+        norm = Normalize(lo, hi)
+    else:
+        if np.ndim(levels) == 0:
+            levels = np.linspace(lo, hi, int(levels) + 1)
+        norm = BoundaryNorm(levels, plt.get_cmap(cmap).N, extend=extend)
     if cbar_label is None:
-        cbar_label = r'$\log|\lambda_1|$' if log else r'$|\lambda_1|$'
+        lam = r'|\lambda_1| / |\lambda_1|_{\max}' if normalize else r'|\lambda_1|'
+        cbar_label = rf'$\log({lam})$' if log else rf'${lam}$'
 
     created = ax is None
     if created:
         _, ax = plt.subplots(figsize=figsize)
-    im = ax.contourf(f1, f2, field, levels=levels, cmap=cmap, extend=extend,
-                     vmin=vmin, vmax=vmax)
+    # L[i, j] is (f1 = freq[i], f2 = freq[j]); pcolormesh wants rows = y
+    im = ax.pcolormesh(edges, edges, field.T, shading='flat', cmap=cmap,
+                       norm=norm)
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
     ax.set_aspect('equal')
+    if title is not None:
+        ax.set_title(title)
 
     # default to the extent of the computed triads, which is usually a small
     # part of the full plane
-    valid = np.isfinite(np.asarray(np.abs(L)))
-    if xlim is None and valid.any():
-        xlim = (f1[valid].min(), f1[valid].max())
-    if ylim is None and valid.any():
-        ylim = (f2[valid].min(), f2[valid].max())
+    if valid.any():
+        i, j = np.nonzero(valid)
+        if xlim is None:
+            xlim = (edges[i.min()], edges[i.max() + 1])
+        if ylim is None:
+            ylim = (edges[j.min()], edges[j.max() + 1])
     if xlim is not None:
         ax.set_xlim(xlim)
     if ylim is not None:
@@ -190,8 +207,8 @@ def plot_mode_bispectrum(L, freq, log=True, levels=None, xlim=None, ylim=None,
         for m_f1, m_f2 in mark:
             ax.plot(m_f1, m_f2, 'o', ms=8, mfc='none', mec='k', mew=1.5)
 
-    ax.figure.colorbar(im, ax=ax, extendrect=extendrect, label=cbar_label,
-                       ticks=ticks)
+    ax.figure.colorbar(im, ax=ax, extend=extend, extendrect=extendrect,
+                       label=cbar_label, ticks=ticks)
     if filename:
         _save_figure(ax.figure, filename, path)
         if created:
@@ -306,3 +323,4 @@ def plot_triad_modes(modes, k, l, x=None, y=None, vars_idx=(0,),
         fig.tight_layout()
     _save_show_plots(filename, path, plt)
     return fig
+

@@ -6,7 +6,8 @@ on the full ``refs/bmd/wake_Re500.mat`` (``git submodule update --init``):
 the mode bispectrum of Fig. 7, ``refs/figures/cylinder_bispectrum_sumdiff.pdf``,
 and the bispectral modes of the triad cascade of Figs. 8 and 9.
 
-    MPLBACKEND=Agg python examples/example5_cylinder_paper.py   # ~4.5 min
+    MPLBACKEND=Agg python examples/example5_cylinder_paper.py   # ~18 min
+    pybmd-viewer example5_out/modes/triads      # browse every exported triad
 
 Writes to ``example5_out/``:
 
@@ -15,7 +16,10 @@ Writes to ``example5_out/``:
   Fig. 7b: the u and v components of the bispectral mode phi_{k+l}, the
   cross-frequency field phi_{k o l} and the interaction map
   |phi_{k o l} phi_{k+l}|. Fig. 8 is the phi_{k+l} row of all six; Fig. 9 is
-  the whole of ``modes_k12_l12.png``.
+  the whole of ``modes_k12_l12.png``;
+- ``modes/triads/triad_k*_l*/``, the images of all 703 triads of the mode fit
+  (phi_k, phi_l, phi_{k+l} of u and the interaction map), and
+  ``modes/bmd.pkl`` (~0.5 GB), for ``pybmd-viewer``.
 
 Both use the same BMD settings, q = [u, v] as in the paper; the modes come
 from a second fit restricted to the cascade (each triad is solved
@@ -23,6 +27,7 @@ independently, so the restriction changes nothing -- checked on lambda_1).
 See example5_cylinder_paper.md for how the parameters were recovered.
 '''
 import os
+import pickle
 import sys
 
 import matplotlib.pyplot as plt
@@ -94,6 +99,49 @@ def _lambda1(bmd, k, l):
     '''``|lambda_1|`` of the triad ``(k, l, k+l)`` of a fitted decomposition.'''
     i = bmd.find_triad(k, l)
     return abs(bmd.L[bmd.triads.f1_idx[i], bmd.triads.f2_idx[i]])
+
+
+def _save_field(field, f, path, x, y, cmap):
+    '''One mode field (its real part) or interaction map as a PNG.'''
+    field = np.real(field)
+    m = np.max(np.abs(field)) or 1.0
+    levels = (np.linspace(0, m, 257) if np.min(field) >= 0
+              else 0.5 * m * np.linspace(-1, 1, 257))
+    fig, ax = plt.subplots(figsize=(6, 4))
+    im = ax.contourf(x, y, field, levels=levels, cmap=cmap, extend='both')
+    ax.set_aspect('equal')
+    ax.set_xlabel('$x$')
+    ax.set_ylabel('$y$')
+    ax.set_title(f'$f = {f:.3f}$')
+    fig.colorbar(im, ax=ax, extendrect=True)
+    fig.savefig(path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+
+
+def export_triads(bmd, bmd_dir, x, y):
+    '''The u component of every triad, in the layout ``pybmd-viewer`` reads:
+    ``bmd_dir/triads/triad_k{k}_l{l}/Mode_{k,l,kl}_f{f:.3f}.png`` and
+    ``psi.png``, with the fit pickled to ``bmd_dir/bmd.pkl``. Needs
+    ``constituent_modes`` and ``store_modes``.'''
+    t = bmd.triads
+    for i in range(bmd.n_triads):
+        k, l = int(t.k[i]), int(t.l[i])
+        f1, f2, f3 = t.f1[i], t.f2[i], t.f3[i]
+        triad_dir = os.path.join(bmd_dir, 'triads', f'triad_k{k}_l{l}')
+        os.makedirs(triad_dir, exist_ok=True)
+        modes = bmd.get_modes_at_triad(i)  # (n_comp, ny, nx, nv)
+        psi = np.abs(modes[0][..., 0] * modes[1][..., 0])  # interaction map
+        _save_field(modes[2][..., 0], f1,
+                    os.path.join(triad_dir, f'Mode_k_f{f1:.3f}.png'), x, y, 'RdBu_r')
+        _save_field(modes[3][..., 0], f2,
+                    os.path.join(triad_dir, f'Mode_l_f{f2:.3f}.png'), x, y, 'RdBu_r')
+        _save_field(modes[0][..., 0], f3,
+                    os.path.join(triad_dir, f'Mode_kl_f{f3:.3f}.png'), x, y, 'RdBu_r')
+        _save_field(psi, f3, os.path.join(triad_dir, 'psi.png'), x, y, 'bone_r')
+    with open(os.path.join(bmd_dir, 'bmd.pkl'), 'wb') as f:
+        pickle.dump(bmd, f, protocol=pickle.HIGHEST_PROTOCOL)
+    print(f'{bmd.n_triads} triads written; view them with: '
+          f"pybmd-viewer {os.path.join(bmd_dir, 'triads')}")
 
 
 def plot_bispectrum(bmd, path):
@@ -171,7 +219,8 @@ def main(save_dir='example5_out'):
         params,
         regions=[1],              # every triad of Fig. 8 is a sum-interaction
         max_freq_idx=36,          # covers the cascade, 703 triads
-        store_modes=True,         # ~250 MB in memory
+        store_modes=True,         # ~500 MB in memory
+        constituent_modes=True,   # phi_k and phi_l too, for export_triads
         savedir=os.path.join(save_dir, 'modes'),
     )
     bmd_modes = Standard(params=params_modes, weights=weights).fit(data)
@@ -193,11 +242,14 @@ def main(save_dir='example5_out'):
               f'{symmetric_fraction(phi[..., 1]):.3f}   '
               f'{lam:7.3f}   {n * lam:7.3f}')
         plot_triad_modes(
-            modes, k, l, x=x, y=y, vars_idx=(0, 1), figsize=(11, 9),
+            modes[:2], k, l, x=x, y=y, vars_idx=(0, 1), figsize=(11, 9),
             xlabel='$x$', ylabel='$y$', path=save_dir,
             filename=f'modes_k{k}_l{l}.png')
     print(f'max relative difference of |lambda_1| between the two fits: '
           f'{max_rel:.1e}')
+
+    # -- every triad of the mode fit, for pybmd-viewer -----------------------
+    export_triads(bmd_modes, os.path.join(save_dir, 'modes'), x=x, y=y)
     return bmd, bmd_modes
 
 

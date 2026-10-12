@@ -24,6 +24,9 @@ Four layers, from solver to paper:
   `tests/octave/octave_ref.py` is the harness, `tests/octave/build_report.py` regenerates the
   figures of [`octave/octave_cross_validation.md`](octave/octave_cross_validation.md).
 - `test_io_rejects_complex.py`: complex data is refused rather than cast to its real part.
+- `test_viewer.py`: `plot_mode_bispectrum` draws one `QuadMesh` cell per frequency pair,
+  example 5's `export_triads` output is read back by the viewer with no warnings, and the
+  viewer navigates, likes and marks triads offscreen (self-skips without PyQt5).
 - `test_weights.py`: `curvilinear_2d` reduces to `trapz_2d` on a rectilinear grid, is rotation
   invariant, and integrates a polar annulus.
 

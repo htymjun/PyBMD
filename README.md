@@ -36,7 +36,10 @@ triplets `{f1, f2, f1+f2}`, or index triplets `(k, l, k+l)`.*
 pip install -e .              # core: numpy, scipy, pyyaml, matplotlib
 pip install -e '.[mpi]'       # add mpi4py for parallel runs
 pip install -e '.[io,test]'   # .mat reader (v7.3), and pytest
+pip install -e '.[viewer]'    # PyQt5, for the pybmd-viewer command (see Triad viewer)
 ```
+
+Extras combine, e.g. `pip install -e '.[viewer,mpi,io,test]'`.
 
 ## Usage
 
@@ -83,6 +86,10 @@ from pybmd.bmd.postproc import plot_mode_bispectrum, plot_triad_modes
 plot_mode_bispectrum(bmd.L, bmd.freq)
 plot_triad_modes(bmd.get_modes_at_triad(i), k=5, l=-2, x=x, y=y)
 ```
+
+`plot_mode_bispectrum` draws one cell per frequency pair (`pcolormesh`), so each computed triad
+is a visible cell; pass `levels` for banded colours and `normalize=True` to scale the peak to
+`log 1 = 0`.
 
 Post-processing takes a fitted `Standard`/`Cross`, not a path. To revisit a result later, pickle
 the fitted object (modes saved with `save_modes` are read back from `bmd.savedir_sim`, so keep
@@ -147,6 +154,80 @@ the original MATLAB implementation, and for reproductions of Schmidt (2020)'s fi
 `example4_hypothesis_testing.py` (surrogate data, Figs. 4 and 5)
 and `example5_cylinder_paper.py` (cylinder-wake mode bispectrum and modes, Figs. 7-9; see
 `example5_cylinder_paper.md`).
+
+## Triad viewer
+
+`pybmd-viewer` is a GUI (PyQt5) for stepping through the modes of many triads, one at a time,
+and marking the interesting ones. It shows four images per triad -- `phi_k`, `phi_l`,
+`phi_{k+l}` and the interaction map -- next to the mode bispectrum with the current triad
+outlined.
+
+**1. Install.** From the repository root, in the environment you run PyBMD in:
+
+```bash
+pip install -e '.[viewer]'    # installs PyQt5 and the pybmd-viewer command
+pybmd-viewer --help           # check: prints the usage
+```
+
+The `-e` (editable) install matters: a plain `pip install .` copies the package into
+site-packages, and that copy keeps shadowing your checkout after you edit or pull it. If
+`pybmd-viewer` fails with an unexpected keyword argument such as `normalize`, check which copy
+is imported:
+
+```bash
+python -c "import pybmd.bmd.postproc as p; print(p.__file__)"   # should be inside your checkout
+```
+
+If it prints a `site-packages/pybmd/...` path, remove that directory, then run
+`pip install -e '.[viewer]'` again.
+
+On Linux or WSL the viewer needs a display (WSLg on Windows 11). If Qt reports
+`Could not load the Qt platform plugin "xcb"`, install the X11 libraries it needs:
+`sudo apt install libxcb-xinerama0 libxkbcommon-x11-0`.
+
+**2. Write the images.** The viewer reads plain PNG files, so you draw them however suits your
+problem. It expects this layout:
+
+```
+DIR/bmd.pkl                         optional: the pickled fit, for the bispectrum panel
+DIR/triads/triad_k{k}_l{l}/
+    Mode_k_f{f1:.3f}.png            phi_k
+    Mode_l_f{f2:.3f}.png            phi_l
+    Mode_kl_f{f3:.3f}.png           phi_{k+l}
+    psi.png                         |phi_{k+l} phi_{k o l}|
+```
+
+`phi_k` and `phi_l` need `params['constituent_modes'] = True` when fitting. The viewer checks
+that `f1 + f2 = f3` within 2e-3 (the file names are rounded to 3 decimals), and warns in red if an image is missing or duplicated.
+`export_triads` in `examples/example5_cylinder_paper.py` writes this layout for the cylinder
+wake; copy it and replace its plotting.
+
+**3. Run.**
+
+```bash
+pybmd-viewer DIR/triads                  # likes go to DIR/triads/liked_triads.txt
+pybmd-viewer DIR/triads -o my_likes.txt  # or to a file of your choice
+```
+
+| Key | Action |
+|---|---|
+| `k` / `→` | next triad |
+| `j` / `←` | previous triad |
+| `l` | like / unlike |
+| `Home` / `End` | first / last |
+| `Esc` | quit (the liked list is saved and printed) |
+
+On the bispectrum, click a cell to jump to that triad, or drag a rectangle to zoom in. The
+`Undo zoom` and `Reset view` buttons undo the zoom. Double-click a liked triad in the list to
+jump to it. The liked file is tab-separated, one line per triad: `name`, the frequencies, then
+the absolute path. It is saved on every toggle and reloaded at startup.
+
+For example, on the cylinder wake (needs `git submodule update --init`):
+
+```bash
+MPLBACKEND=Agg python examples/example5_cylinder_paper.py
+pybmd-viewer example5_out/modes/triads
+```
 
 ## Parameters
 

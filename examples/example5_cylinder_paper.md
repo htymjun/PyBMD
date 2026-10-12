@@ -7,8 +7,15 @@ bispectral modes of Figs. 8 and 9 (see [below](#spatial-modes-figs-8-and-9)).
 
 ```bash
 git submodule update --init
-MPLBACKEND=Agg python examples/example5_cylinder_paper.py   # ~2-4.5 min, ~0.9 GB RAM
+MPLBACKEND=Agg python examples/example5_cylinder_paper.py   # ~18 min, ~1.1 GB RAM
+pybmd-viewer example5_out/modes/triads                      # browse every triad (README: Triad viewer)
 ```
+
+Most of the run time is `export_triads` drawing 2812 PNGs (703 triads x 4). The fits and the
+figures alone take ~2-4.5 min. The export also writes `example5_out/modes/bmd.pkl` (~0.5 GB,
+modes included), and the mode fit now sets `constituent_modes=True` so that `phi_k`/`phi_l` exist.
+`export_triads` is the template for other data: the plotting is deliberately kept in the
+example, not in PyBMD, because it differs per problem.
 
 It writes `example5_out/cylinder_bispectrum_sumdiff.png` and `example5_out/modes_k{k}_l{l}.png` in
 the working directory. Both use the same BMD settings with `q = [u, v]`, as in the paper.

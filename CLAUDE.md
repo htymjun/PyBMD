@@ -10,17 +10,20 @@ when working there — [`pybmd/bmd/CLAUDE.md`](pybmd/bmd/CLAUDE.md) for the BMD/
 ## Commands
 
 ```bash
-pip install -e '.[mpi,io,test]'      # editable install; extras: mpi, io (.mat), test, docs
+pip install -e '.[mpi,io,test]'      # editable install; extras: mpi, io (.mat), test, docs,
+                                     # viewer (PyQt5, for pybmd-viewer)
 git submodule update --init          # populate refs/bmd (the MATLAB reference), only needed
                                      # for tests/test_octave_reference.py -- see tests/CLAUDE.md
 
-pytest                                # full suite, 97 tests: 11 `slow` (Octave
+pytest                                # full suite, 100 tests: 11 `slow` (Octave
                                       # cross-validation), 1 `mpi`
 pytest -m "not slow and not mpi"      # fast subset, ~30 s
 pytest tests/optimizers -q            # one directory (numerical-radius solver tests,
                                       # one test function per file)
 pytest tests/test_hypothesis.py::test_resonant_triad_is_detected -q   # one test
 pytest -k "hypothesis or octave"   # by name
+
+pybmd-viewer DIR/triads               # triad viewer GUI (needs the viewer extra)
 
 python -m pyflakes pybmd/ tests/ examples/   # only linter used; ignore the
                                              # "f-string is missing placeholders"
@@ -60,6 +63,29 @@ per triad (optionally four, with `constituent_modes` adding the modes at `k` and
 The implementation (`pybmd/bmd/`) — the Base/Standard/Cross split, data flow, invariants that are
 easy to break, the ported-solver deviations from the MATLAB reference, and data conventions — is
 documented in [`pybmd/bmd/CLAUDE.md`](pybmd/bmd/CLAUDE.md).
+
+## Triad viewer
+
+`pybmd/viewer.py` (PyQt5, entry point `pybmd-viewer` in `setup.cfg`, extra `viewer`; not imported
+by `pybmd/__init__.py`, so the core never needs Qt) browses `triad_k{k}_l{l}/` directories of
+`Mode_{k,l,kl}_f{f:.3f}.png` + `psi.png` and records liked triads. PyBMD does not write those
+images -- plotting differs per problem -- so `export_triads` lives in
+`examples/example5_cylinder_paper.py` as a template; `tests/test_viewer.py` checks it round-trips
+through `find_triads`/`Triad.warning()`, so change `MODE_RE`/`TRIAD_DIR_RE` and that function
+together. UI strings and comments are English.
+
+- `load_bmd()` unpickles `ROOT/bmd.pkl` or its parent's. `TRIAD_DIR_RE`'s integer (k, l) map to
+  the (f1, f2) plane through `bmd.f_idx`/`bmd.freq`, falling back to the filename frequencies.
+  `BispectrumPanel` draws through `plot_mode_bispectrum(..., normalize=True, ax=ax)`, outlines
+  the current cell, zooms on a drag of at least `DRAG_PX` pixels with an undo stack, and jumps
+  on a click.
+- Navigation is manual only; the user explicitly does not want autoplay. Keys are `QShortcut`s
+  on the window, and every button, slider and list is `Qt.NoFocus` so no widget swallows them.
+  Key bindings must stay visible in three places: button labels, tooltips and `KEY_GUIDE`.
+- Likes are keyed by resolved path. They are saved on every toggle as
+  `name\tk=.. l=.. kl=..\tabs_path`, and the last field is what is reloaded.
+- To check the GUI headlessly, set `QT_QPA_PLATFORM=offscreen`, then call
+  `QApplication.setActiveWindow(w)` before `QTest.keyClick`; shortcuts ignore inactive windows.
 
 ## Testing strategy
 
